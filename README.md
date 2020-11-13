@@ -9,5 +9,18 @@ A UK-based online retail store has captured the sales data for different product
 Project Objective:
 Find significant customers for the business who make high purchases of their favourite products. The organization wants to roll out a loyalty program to the high-value customers after identification of segments. Use the clustering methodology to segment customers into groups.
 
+With the first look at the data, there was an issue with the missing values, that neede to be addressed to eliminate bias.
 
-![NaN values](\images\NaN Values.jpg)
+![NaN values](https://github.com/NiqDS/UK-High-Value-Clients-Identifiction/blob/main/images/NaN%20Values.JPG)
+
+Clustering:
+
+![Clustering](https://github.com/NiqDS/UK-High-Value-Clients-Identifiction/blob/main/images/Clustering.JPG)
+
+Dendrogram:
+
+![Dendrogram](https://github.com/NiqDS/UK-High-Value-Clients-Identifiction/blob/main/images/Dendrogram.JPG)
+
+Final table with assigned clusters to each Customer ID:
+
+![Clusters](https://github.com/NiqDS/UK-High-Value-Clients-Identifiction/blob/main/images/With%20Assigned%20Clusters.JPG)
