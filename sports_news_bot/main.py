@@ -3,9 +3,11 @@ import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
-from telegram.ext import Application, CommandHandler
+from telegram import BotCommand
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 
 from bot.handlers import (
+    button_callback,
     help_command,
     latest_command,
     resume_command,
@@ -46,8 +48,23 @@ def _setup_logging() -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
+_BOT_COMMANDS = [
+    BotCommand("start",   "Start the bot / show quick menu"),
+    BotCommand("setlang", "Set your language (shows menu)"),
+    BotCommand("setteam", "Set team to follow, e.g. /setteam Arsenal"),
+    BotCommand("latest",  "Get latest news right now"),
+    BotCommand("status",  "Show your current settings"),
+    BotCommand("stop",    "Pause automatic notifications"),
+    BotCommand("resume",  "Resume automatic notifications"),
+    BotCommand("help",    "Show all commands and usage"),
+]
+
+
 async def _post_init(application: Application) -> None:
     await init_database()
+
+    # Register the "/" command menu in Telegram so users can tap instead of type
+    await application.bot.set_my_commands(_BOT_COMMANDS)
 
     jq = application.job_queue
     # Check news every 15 minutes (first run 30 s after startup)
@@ -96,8 +113,12 @@ def main() -> None:
     app.add_handler(CommandHandler("stop",               stop_command))
     app.add_handler(CommandHandler(["resume", "on"],     resume_command))
     app.add_handler(CommandHandler(["latest", "news"],   latest_command))
+    app.add_handler(CallbackQueryHandler(button_callback))
 
-    app.run_polling(allowed_updates=["message"], drop_pending_updates=True)
+    app.run_polling(
+        allowed_updates=["message", "callback_query"],
+        drop_pending_updates=True,
+    )
 
 
 if __name__ == "__main__":
