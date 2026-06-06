@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
 
 import aiosqlite
 
@@ -78,7 +79,7 @@ async def upsert_user(user_id: int, username: str, first_name: str) -> None:
         await db.commit()
 
 
-async def get_user(user_id: int) -> aiosqlite.Row | None:
+async def get_user(user_id: int) -> Optional[aiosqlite.Row]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -87,7 +88,7 @@ async def get_user(user_id: int) -> aiosqlite.Row | None:
             return await cur.fetchone()
 
 
-async def get_active_users() -> list[aiosqlite.Row]:
+async def get_active_users() -> List[aiosqlite.Row]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute(
@@ -139,7 +140,7 @@ async def save_news_item(
     source_url: str,
     source_name: str,
     published_at: datetime,
-) -> int | None:
+) -> Optional[int]:
     try:
         async with aiosqlite.connect(DB_PATH) as db:
             cur = await db.execute("""
@@ -165,7 +166,7 @@ async def get_unsent_news(
     team_name: str,
     target_lang: str,
     limit: int = 3,
-) -> list[aiosqlite.Row]:
+) -> List[aiosqlite.Row]:
     async with aiosqlite.connect(DB_PATH) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("""

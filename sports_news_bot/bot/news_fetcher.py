@@ -2,7 +2,7 @@ import asyncio
 import logging
 from datetime import datetime
 from email.utils import parsedate_to_datetime
-from typing import Any
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
 
 import aiohttp
@@ -71,7 +71,7 @@ def _parse_date(entry: Any) -> datetime:
 async def _fetch_feed(
     url: str,
     session: aiohttp.ClientSession,
-) -> list[Any]:
+) -> List[Any]:
     try:
         async with session.get(
             url,
@@ -89,8 +89,8 @@ async def _fetch_feed(
 
 async def fetch_team_news(
     team_name: str,
-    search_languages: list[str] | None = None,
-) -> list[dict]:
+    search_languages: Optional[List[str]] = None,
+) -> List[Dict]:
     """Fetch news about *team_name* from Google News RSS in multiple languages.
 
     Returns a deduplicated list of dicts sorted by published_at descending.
