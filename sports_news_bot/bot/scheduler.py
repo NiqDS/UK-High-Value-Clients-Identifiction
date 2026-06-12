@@ -45,10 +45,13 @@ def _format_post(news_row, team_name: str) -> str:
 async def _process_group(
     team_name: str,
     target_lang: str,
-    user_ids: list[int],
+    user_ids: list,
     bot,
-) -> None:
-    """Fetch, translate, cache, and deliver news for one (team, lang) group."""
+) -> int:
+    """Fetch, translate, cache, and deliver news for one (team, lang) group.
+
+    Returns the total number of messages sent across all users.
+    """
     logger.info("Fetching news | team=%s | lang=%s | users=%d",
                 team_name, target_lang, len(user_ids))
 
@@ -83,6 +86,7 @@ async def _process_group(
             published_at=item["published_at"],
         )
 
+    total_sent = 0
     for user_id in user_ids:
         unsent = await get_unsent_news(
             user_id=user_id,
@@ -100,8 +104,10 @@ async def _process_group(
                 )
                 await mark_news_sent(user_id, row["id"])
                 await asyncio.sleep(0.5)
+                total_sent += 1
             except Exception as exc:
                 logger.error("Failed to send news to user %d: %s", user_id, exc)
+    return total_sent
 
 
 async def check_and_send_news(context: ContextTypes.DEFAULT_TYPE) -> None:
