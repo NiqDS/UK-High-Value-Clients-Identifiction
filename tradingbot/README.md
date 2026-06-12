@@ -12,10 +12,10 @@ setting defaults to its most conservative value.
 
 ---
 
-## ⚠️ Build status — Step 1 of 8
+## ⚠️ Build status — Step 2 of 8
 
-This milestone delivers the **scaffold, configuration system, and a read-only
-exchange adapter** (sandbox). The risk engine, execution, event/kill-switch
+Delivered so far: the **scaffold, config system, read-only exchange adapter**
+(Step 1) and the **hard risk engine** (Step 2). Execution, event/kill-switch
 modules, Telegram approval, latency monitor, and backtesting are **not built
 yet** — see [Build order](#build-order). Do not run this against real funds.
 
@@ -25,9 +25,18 @@ What works today:
   `pydantic-settings`, with conservative defaults and load-time validation.
 - A thin, venue-agnostic `ccxt` adapter for **read-only** calls: balances,
   tickers, order book, OHLCV, trading fees.
+- The **risk engine**: every `OrderIntent` passes 14 ordered gates — trading
+  flag, symbol allowlist, intent sanity, daily-loss stop, max trades/notional
+  per day, open positions/orders, min/max notional (absolute + %-equity),
+  per-trade risk-to-stop cap, spread guard, **fee gate** (rejects any entry
+  whose target move can't clear round-trip fees + margin, conservatively using
+  taker fees when fallback is allowed), and the **account floor** (projected
+  post-trade free balance — a breach flips a persistent halt flag). Rolling
+  daily counters with a configurable UTC reset boundary.
 - Structured logging with **secret redaction**.
 - `check-config` and `healthcheck` CLI commands.
-- A network-free unit-test suite (18 tests).
+- A network-free unit-test suite (**52 tests**: config, adapter, risk state,
+  one per risk gate, floor-halt, and approval routing).
 
 ---
 
@@ -111,8 +120,9 @@ Modules (those marked ✅ exist as of Step 1):
 - `exchange/` ✅ — thin ccxt adapter + typed models.
 - `config.py` ✅ — validated settings + secrets.
 - `logging_setup.py` ✅ — structured logging + secret redaction.
+- `domain.py` ✅ — shared types (`OrderIntent`, `Side`, `OrderType`).
+- `risk/` ✅ — the risk engine + persistent state (floor halt, daily counters).
 - `strategy/` — pluggable `generate_signals() -> list[OrderIntent]` (reference SMA crossover).
-- `risk/` — the risk engine (most important module).
 - `execution/` — fee-aware, maker-first placement with slippage/spread guards.
 - `events/` — economic-calendar event-risk + news/volatility kill-switch.
 - `regime/` — optional slow uncertainty/sentiment overlay.
@@ -124,8 +134,8 @@ Modules (those marked ✅ exist as of Step 1):
 
 ## Build order
 
-1. **✅ Scaffold, config, read-only exchange adapter (sandbox).** ← you are here
-2. Risk engine + tests (floor, limits, daily counters, fee gate, min-notional/spread).
+1. **✅ Scaffold, config, read-only exchange adapter (sandbox).**
+2. **✅ Risk engine + tests (floor, limits, daily counters, fee gate, min-notional/spread).** ← you are here
 3. Execution layer with paper mode (maker-first, slippage guard); full dry-run pipeline.
 4. Event-risk module + news/volatility kill-switch + tests.
 5. Telegram bot: alerts, approve/reject, `/settings` menu, status, pause/resume, auth allowlist.
