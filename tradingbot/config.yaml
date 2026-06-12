@@ -58,6 +58,21 @@ strategy:
   vwap_window: 50                   # bars used to compute the volume-weighted average cost
   buy_valuation_floor_pct: 0.0      # BUY only when price is <= this% vs VWAP (undervaluation floor)
   force_exit_overvaluation_pct: 3.0 # FORCE-EXIT + emergency alert when price >= this% above VWAP
+  # Fee-drag controls (fewer, higher-conviction trades):
+  trade_cooldown_bars: 0            # minimum bars between entries (0 = off)
+  min_crossover_strength_pct: 0.0   # require (fast-slow)/slow >= this % at the crossover
+  # Active VWAP position sizing:
+  sizing_mode: fixed                # fixed | vwap_scaled (size up the more undervalued)
+  vwap_size_min_mult: 0.5
+  vwap_size_max_mult: 1.5
+  vwap_full_size_discount_pct: 2.0  # discount below VWAP that earns the max size
+  # Adaptive exits:
+  exit_mode: pct                    # pct | atr (volatility-based TP/SL)
+  atr_period: 14
+  atr_tp_mult: 2.0
+  atr_sl_mult: 1.5
+  trailing_enabled: false           # ratchet the stop up behind price (ATR-distance)
+  trailing_atr_mult: 2.0
 
 # --- Scheduled macro events (FOMC, CPI, PPI, NFP...). Manage exposure, not direction.
 events:

@@ -9,7 +9,7 @@ the bot never starts in an unsafe state.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field, SecretStr, model_validator
@@ -148,6 +148,30 @@ class StrategyConfig(BaseModel):
     # Force-exit an open position (+ emergency alert) when its price rises this
     # far above VWAP (the overvaluation ceiling).
     force_exit_overvaluation_pct: float = Field(default=3.0, gt=0.0)
+
+    # --- fee-drag controls: fewer, higher-conviction trades ---------------
+    trade_cooldown_bars: int = Field(default=0, ge=0)          # min bars between entries
+    min_crossover_strength_pct: float = Field(default=0.0, ge=0.0)  # require (fast-slow)/slow >= this
+
+    # --- active VWAP position sizing --------------------------------------
+    sizing_mode: Literal["fixed", "vwap_scaled"] = "fixed"
+    vwap_size_min_mult: float = Field(default=0.5, ge=0.0)
+    vwap_size_max_mult: float = Field(default=1.5, ge=0.0)
+    vwap_full_size_discount_pct: float = Field(default=2.0, gt=0.0)  # discount giving max size
+
+    # --- adaptive (ATR) exits ---------------------------------------------
+    exit_mode: Literal["pct", "atr"] = "pct"
+    atr_period: int = Field(default=14, gt=0)
+    atr_tp_mult: float = Field(default=2.0, gt=0.0)
+    atr_sl_mult: float = Field(default=1.5, gt=0.0)
+    trailing_enabled: bool = False
+    trailing_atr_mult: float = Field(default=2.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def _check_sizing(self) -> "StrategyConfig":
+        if self.vwap_size_min_mult > self.vwap_size_max_mult:
+            raise ValueError("strategy.vwap_size_min_mult must be <= vwap_size_max_mult")
+        return self
 
     @model_validator(mode="after")
     def _check_periods(self) -> "StrategyConfig":

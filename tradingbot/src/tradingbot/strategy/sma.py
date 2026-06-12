@@ -50,6 +50,17 @@ def vwap(candles: list[Candle], window: int) -> float | None:
     return sum(t * c.volume for t, c in zip(typical, sub)) / total_vol
 
 
+def atr(candles: list[Candle], period: int) -> float | None:
+    """Average True Range over the last ``period`` bars (volatility measure)."""
+    if len(candles) < period + 1:
+        return None
+    trs = []
+    for i in range(1, len(candles)):
+        h, low, prev_close = candles[i].high, candles[i].low, candles[i - 1].close
+        trs.append(max(h - low, abs(h - prev_close), abs(low - prev_close)))
+    return sum(trs[-period:]) / period
+
+
 def _valuation_label(pct: float) -> str:
     if pct <= -0.1:
         return "undervalued"
@@ -63,6 +74,32 @@ class SmaCrossoverStrategy(Strategy):
 
     def __init__(self, config: StrategyConfig) -> None:
         self.config = config
+        self._last_entry_len: int | None = None  # bar count at last entry (cooldown)
+
+    # -- sizing / exit helpers ---------------------------------------------
+    def _size_amount(self, price: float, valuation_pct: float) -> float:
+        cfg = self.config
+        base = cfg.target_notional_quote / price
+        if cfg.sizing_mode != "vwap_scaled":
+            return base
+        # the deeper below VWAP (more undervalued), the larger the size
+        discount = max(0.0, -valuation_pct)
+        frac = min(1.0, discount / cfg.vwap_full_size_discount_pct)
+        mult = cfg.vwap_size_min_mult + (cfg.vwap_size_max_mult - cfg.vwap_size_min_mult) * frac
+        return base * mult
+
+    def _exits(self, price: float, candles: list[Candle]) -> tuple[float, float, float | None]:
+        cfg = self.config
+        if cfg.exit_mode == "atr":
+            a = atr(candles, cfg.atr_period)
+            if a:
+                tp = price + cfg.atr_tp_mult * a
+                sl = price - cfg.atr_sl_mult * a
+                trail = cfg.trailing_atr_mult * a if cfg.trailing_enabled else None
+                return tp, sl, trail
+        # fixed-percent fallback
+        return (price * (1 + cfg.take_profit_pct / 100.0),
+                price * (1 - cfg.stop_loss_pct / 100.0), None)
 
     def generate_signals(self, market: MarketData) -> list[OrderIntent]:
         cfg = self.config
@@ -119,7 +156,23 @@ class SmaCrossoverStrategy(Strategy):
             # BUY only when sufficiently undervalued: price at/below the floor vs VWAP.
             if cfg.vwap_filter_enabled and valuation_pct > cfg.buy_valuation_floor_pct:
                 return []
-            amount = cfg.target_notional_quote / price
+            # fee-drag: require a strong-enough crossover and respect a cooldown
+            strength = (fast_now - slow_now) / slow_now * 100.0 if slow_now else 0.0
+            if strength < cfg.min_crossover_strength_pct:
+                return []
+            n = len(closes)
+            if (
+                self._last_entry_len is not None
+                and n - self._last_entry_len < cfg.trade_cooldown_bars
+            ):
+                return []
+
+            amount = self._size_amount(price, valuation_pct)
+            tp, sl, trail = self._exits(price, market.candles)
+            self._last_entry_len = n
+            meta = dict(valuation_meta)
+            if trail is not None:
+                meta["trail_distance"] = trail
             return [
                 OrderIntent(
                     symbol=market.symbol,
@@ -127,11 +180,11 @@ class SmaCrossoverStrategy(Strategy):
                     amount=amount,
                     order_type=OrderType.LIMIT,
                     price=price,
-                    take_profit_price=price * (1 + cfg.take_profit_pct / 100.0),
-                    stop_price=price * (1 - cfg.stop_loss_pct / 100.0),
+                    take_profit_price=tp,
+                    stop_price=sl,
                     is_entry=True,
                     reason="sma bullish crossover",
-                    metadata=valuation_meta,
+                    metadata=meta,
                 )
             ]
         if bearish:

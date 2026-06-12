@@ -76,6 +76,7 @@ class _Position:
     take_profit: float | None
     stop: float | None
     entry_fee: float
+    trail_distance: float | None = None
 
 
 def _ticker_at(symbol: str, close: float) -> Ticker:
@@ -134,12 +135,17 @@ class Backtester:
                         take_profit=intent.take_profit_price,  # type: ignore[attr-defined]
                         stop=intent.stop_price,  # type: ignore[attr-defined]
                         entry_fee=entry_fee,
+                        trail_distance=(intent.metadata or {}).get("trail_distance"),  # type: ignore[attr-defined]
                     )
                 elif action == "sell" and pos is not None:
                     close(bar.open * (1 - slip), bar.timestamp, "signal exit")
 
             # 2. intra-bar stop/take-profit (stop first = worst case)
             if pos is not None:
+                # ratchet a trailing stop up behind the bar high
+                if pos.trail_distance is not None:
+                    trailed = bar.high - pos.trail_distance
+                    pos.stop = trailed if pos.stop is None else max(pos.stop, trailed)
                 if pos.stop is not None and bar.low <= pos.stop:
                     close(pos.stop * (1 - slip), bar.timestamp, "stop")
                 elif pos.take_profit is not None and bar.high >= pos.take_profit:

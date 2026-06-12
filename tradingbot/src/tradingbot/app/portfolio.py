@@ -21,6 +21,7 @@ class Position:
     entry_ts: datetime
     take_profit: float | None = None
     stop: float | None = None
+    trail_distance: float | None = None
 
 
 @dataclass
@@ -36,6 +37,7 @@ class PositionTracker:
     def on_fill(
         self, symbol: str, side: Side, price: float, amount: float, ts: datetime,
         take_profit: float | None = None, stop: float | None = None,
+        trail_distance: float | None = None,
     ) -> float:
         """Apply a fill. Returns realised gross P&L (0 for an opening buy)."""
         pos = self.positions.get(symbol)
@@ -43,7 +45,7 @@ class PositionTracker:
             if pos is None:
                 self.positions[symbol] = Position(
                     symbol=symbol, units=amount, entry_price=price, entry_ts=ts,
-                    take_profit=take_profit, stop=stop,
+                    take_profit=take_profit, stop=stop, trail_distance=trail_distance,
                 )
             else:  # average up (rare for the reference strategy)
                 total = pos.units + amount

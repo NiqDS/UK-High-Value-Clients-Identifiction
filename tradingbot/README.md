@@ -49,6 +49,14 @@ What works today:
   Both thresholds are adjustable at runtime from Telegram (`/set_buy_floor`,
   `/set_force_exit`). The valuation is shown in the approval message; the
   intermediate calculation is deliberately not logged.
+
+  Refinement knobs (all in `strategy.*`, off by default so the baseline is
+  unchanged): **fee-drag controls** (`trade_cooldown_bars`,
+  `min_crossover_strength_pct`) for fewer, higher-conviction trades;
+  **active VWAP sizing** (`sizing_mode: vwap_scaled`) that scales position size
+  up the more undervalued the entry; and **adaptive exits**
+  (`exit_mode: atr`, `trailing_enabled`) using volatility-based ATR
+  take-profit/stop and a ratcheting trailing stop.
 - The **execution layer**: maker-first passive pricing (orders rest as makers),
   taker only when `allow_taker_fallback` is on, a pre-placement **slippage
   guard**, and fee-aware fills. A **paper broker** (idempotent by client order

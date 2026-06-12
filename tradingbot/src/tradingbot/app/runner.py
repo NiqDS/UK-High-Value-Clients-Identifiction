@@ -114,6 +114,10 @@ class TradingRunner:
         pos = self.portfolio.get(symbol)
         if pos is None or not last:
             return []
+        # ratchet a trailing stop up behind the latest price
+        if pos.trail_distance is not None:
+            trailed = last - pos.trail_distance
+            pos.stop = trailed if pos.stop is None else max(pos.stop, trailed)
         if pos.stop is not None and last <= pos.stop:
             return [OrderIntent(symbol=symbol, side=Side.SELL, amount=pos.units,
                                 order_type=OrderType.MARKET, price=last, is_entry=False,
@@ -133,6 +137,7 @@ class TradingRunner:
             realized = self.portfolio.on_fill(
                 f.symbol, f.side, f.price, f.amount, now,
                 take_profit=intent.take_profit_price, stop=intent.stop_price,
+                trail_distance=(intent.metadata or {}).get("trail_distance"),
             )
             if f.side == Side.SELL:
                 self.store.record_realized_pnl(now, realized - f.fee_quote)
