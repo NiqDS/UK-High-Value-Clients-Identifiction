@@ -162,6 +162,134 @@ async def _paper_run(settings: Settings) -> int:
     return rc
 
 
+def _build_runner(settings: Settings):
+    """Wire the full live runner. Heavy imports (ccxt/telegram) are local."""
+    import signal
+
+    from .app.health import HealthMonitor
+    from .app.portfolio import PositionTracker
+    from .app.runner import TradingRunner
+    from .events.calendar import EventCalendar
+    from .events.event_risk import EventRiskModule
+    from .events.kill_switch import KillSwitch
+    from .events.posture import PostureProvider
+    from .exchange.factory import build_adapter
+    from .execution.broker import LiveBroker, PaperBroker
+    from .execution.executor import Executor
+    from .execution.pipeline import TradingPipeline
+    from .reporting.weekly import WeeklyReporter
+    from .risk.engine import RiskEngine
+    from .store import SqliteRiskStateStore, TradeLog, make_session_factory
+    from .strategy import build_strategy
+
+    cfg = settings.config
+
+    # persistence: apply saved runtime overrides, then build the SQLite store
+    from .approval.controls import JsonOverrideStore
+    JsonOverrideStore("runtime_overrides.json").apply(cfg)
+    sf = make_session_factory(cfg.app.db_url)
+    store = SqliteRiskStateStore(sf, daily_reset_utc_hour=cfg.risk.daily_reset_utc_hour)
+    trade_log = TradeLog(sf)
+
+    adapter = build_adapter(cfg.exchange, settings.secrets)
+    strategy = build_strategy(cfg.strategy)
+    engine = RiskEngine(cfg, store)
+    broker = PaperBroker(cfg.fees) if cfg.app.dry_run else LiveBroker(adapter)
+    executor = Executor(cfg, broker)
+    event_module = EventRiskModule(cfg.events, EventCalendar.from_config(cfg.events))
+    kill_switch = KillSwitch(cfg.kill_switch)
+    posture = PostureProvider(event_module=event_module, kill_switch=kill_switch)
+    health = HealthMonitor(cfg.app)
+    portfolio = PositionTracker()
+    reporter = WeeklyReporter(trade_log)
+
+    # optional Telegram approval + control + alerts
+    approver = None
+    report_deliver = None
+    emergency_alert = None
+    bot = None
+    token = settings.secrets.telegram_bot_token.get_secret_value()
+    if cfg.telegram.enabled and token and cfg.telegram.allowed_chat_ids:
+        from .approval.controls import SettingsController
+        from .approval.manager import ApprovalManager
+        from .approval.status import StatusReporter
+        from .approval.telegram_bot import TelegramApprovalBot
+
+        async def balance_provider():
+            bal = await adapter.fetch_balance()
+            q = cfg.exchange.quote_currency
+            return bal.total(q), bal.free(q)
+
+        status = StatusReporter(cfg, store, kill_switch=kill_switch, event_module=event_module,
+                                balance_provider=balance_provider)
+        controls = SettingsController(cfg, store, kill_switch=kill_switch,
+                                      overrides=JsonOverrideStore("runtime_overrides.json"))
+        bot_holder: dict = {}
+        manager = ApprovalManager(_LazyNotifier(bot_holder), cfg.telegram.approval_timeout_seconds)
+        bot = TelegramApprovalBot(token, cfg, manager, controls, status)
+        bot_holder["bot"] = bot
+        approver = manager.request
+        report_deliver = bot.send_message
+        emergency_alert = bot.send_message
+    else:
+        logger.warning("Telegram disabled or unconfigured (need token + allowed_chat_ids); "
+                       "running without approval/alerts.")
+
+    pipeline = TradingPipeline(cfg, engine, executor, store, approver=approver,
+                               posture_provider=posture, health=health,
+                               emergency_alert=emergency_alert)
+    runner = TradingRunner(
+        settings=settings, adapter=adapter, pipeline=pipeline, strategy=strategy,
+        store=store, trade_log=trade_log, portfolio=portfolio, kill_switch=kill_switch,
+        event_module=event_module, health=health, reporter=reporter,
+        report_deliver=report_deliver, report_path="reports/weekly_latest.md",
+    )
+    return runner, bot, signal
+
+
+class _LazyNotifier:
+    """Defers to the Telegram bot once it is constructed (resolves a chicken/egg
+    between the ApprovalManager and the bot that serves its notifications)."""
+
+    def __init__(self, holder: dict) -> None:
+        self._holder = holder
+
+    async def send_approval_request(self, req) -> None:
+        await self._holder["bot"].send_approval_request(req)
+
+    async def send_message(self, text) -> None:
+        await self._holder["bot"].send_message(text)
+
+
+async def _run(settings: Settings) -> int:
+    runner, bot, signal = _build_runner(settings)
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, runner.request_stop)
+        except NotImplementedError:  # pragma: no cover - e.g. Windows
+            pass
+    if bot is not None:
+        await bot.start()
+    try:
+        await runner.run()
+    finally:
+        if bot is not None:
+            await bot.stop()
+    return 0
+
+
+def _weekly_report(settings: Settings) -> int:
+    from .reporting.weekly import WeeklyReporter
+    from .store import TradeLog, make_session_factory
+
+    cfg = settings.config
+    sf = make_session_factory(cfg.app.db_url)
+    reporter = WeeklyReporter(TradeLog(sf))
+    print(reporter.generate(quote=cfg.exchange.quote_currency))
+    return 0
+
+
 def _backtest(settings: Settings, args) -> int:
     from .backtest.engine import Backtester, BacktestConfig
     from .backtest.synthetic import synthetic_candles
@@ -223,7 +351,8 @@ def _backtest(settings: Settings, args) -> int:
 def main() -> int:
     parser = argparse.ArgumentParser(prog="tradingbot")
     parser.add_argument(
-        "command", choices=["check-config", "healthcheck", "paper-run", "backtest"]
+        "command",
+        choices=["check-config", "healthcheck", "paper-run", "backtest", "run", "weekly-report"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -252,6 +381,11 @@ def main() -> int:
         return asyncio.run(_paper_run(settings))
     if args.command == "backtest":
         return _backtest(settings, args)
+    if args.command == "run":
+        _print_config_summary(settings)
+        return asyncio.run(_run(settings))
+    if args.command == "weekly-report":
+        return _weekly_report(settings)
     return 2  # pragma: no cover
 
 

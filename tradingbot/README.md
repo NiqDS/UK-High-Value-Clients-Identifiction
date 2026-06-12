@@ -12,15 +12,15 @@ setting defaults to its most conservative value.
 
 ---
 
-## ⚠️ Build status — Step 6 of 8
+## ⚠️ Build status — Step 7 of 8
 
-Delivered so far: **scaffold + read-only adapter** (Step 1), the **hard risk
-engine** (Step 2), the **execution layer + reference strategy + dry-run
-pipeline** (Step 3), the **event-risk module + news/volatility kill-switch**
-(Step 4), the **Telegram approval bot + runtime controls** (Step 5), and the
-**latency/heartbeat auto-suspend + honest backtester** (Step 6). What remains:
-the live sandbox end-to-end run (Step 7) and deployment artifacts (Step 8) —
-see [Build order](#build-order). Do not run this against real funds.
+Delivered so far: Steps 1–6 (risk engine, execution, events/kill-switch,
+Telegram bot, heartbeat, backtester) plus **Step 7 — the live runner**:
+the orchestrated loop, position tracking, SQLite persistence (trade log +
+counters + flags), the trade-only-key startup self-check, and the **weekly
+performance report** vs a market benchmark. What remains: deployment artifacts
+(Step 8). The runner defaults to **paper + sandbox**; do not point it at real
+funds until you have validated end-to-end.
 
 What works today:
 
@@ -82,16 +82,30 @@ What works today:
   **out-of-sample split**; a report that shows **gross vs net-of-fees** so a
   strategy that's profitable gross but not net is exposed. See
   [`docs/backtest_report_sample.md`](docs/backtest_report_sample.md).
+- The **live runner**: orchestrates strategy → posture → risk → approval →
+  execution per symbol on an interval, with **position tracking** (so the VWAP
+  force-exit and take-profit/stop monitors run live), a heartbeat task, the
+  kill-switch fed from the candle stream, a **trade-only-key startup self-check**
+  (refuses to run live if withdrawal scope is detected), and graceful shutdown.
+- **SQLite persistence** (SQLAlchemy): the trade log, daily counters, and the
+  trading-enabled flag survive restarts (a floor halt / manual pause is not
+  silently forgotten).
+- A **weekly performance report**: the week's realised P&L net of fees, win
+  rate, and per-symbol net **vs a buy-and-hold market benchmark**, delivered to
+  Telegram and written to `reports/`, so the algorithm can be assessed and tuned.
 - Structured logging with **secret redaction**.
-- `check-config`, `healthcheck`, `paper-run` (never live), and `backtest` CLI
-  commands.
-- A network-free unit-test suite (**121 tests**) covering config, adapter, every
+- `check-config`, `healthcheck`, `paper-run` (never live), `backtest`, `run`,
+  and `weekly-report` CLI commands.
+- A network-free unit-test suite (**151 tests**) covering config, adapter, every
   risk gate + floor-halt, approval routing, strategy signals, execution
   pricing/slippage/idempotency, the full pipeline, event windows + transitions,
   kill-switch trigger/cooldown/manual-resume, posture integration, the approval
   workflow (approve/reject/timeout, settings, persistence, status), the health
-  monitor (suspend/resume/blip-reset + pipeline suspend), and the backtester
-  (no-look-ahead, next-open fills, fee impact, intra-bar stop, OOS split).
+  monitor (suspend/resume/blip-reset + pipeline suspend), the backtester
+  (no-look-ahead, next-open fills, fee impact, intra-bar stop, OOS split), the
+  SQLite store (trade log + counters/flag persistence across restart), position
+  tracking, the weekly report + market benchmark, the trade-only-key self-check,
+  and the runner's `run_once` (execute, persist, no double-entry, TP/stop exits).
 
 ---
 
@@ -205,6 +219,26 @@ and out-of-sample segments.
 > wiring only — the sample report shows it is net-negative after fees, as
 > expected. Model volatility regimes before trusting any news/regime overlay.
 
+## Running live (paper + sandbox first)
+
+```bash
+python -m tradingbot run            # the orchestrated loop (paper + sandbox by default)
+python -m tradingbot weekly-report  # print the last 7 days' performance on demand
+```
+
+`run` wires everything: per-symbol strategy → posture (event-risk + kill-switch)
+→ risk engine → Telegram approval (if configured) → execution, with the
+heartbeat auto-suspend, position tracking (drives the VWAP force-exit and
+take-profit/stop monitors), SQLite persistence, and graceful shutdown on
+SIGINT/SIGTERM. On startup it runs the **trade-only-key self-check** and refuses
+to start live if it detects withdrawal scope on the key. The **weekly report**
+is generated every 7 days, delivered to Telegram, and written to
+`reports/weekly_latest.md`.
+
+Keep `app.dry_run: true` and `exchange.sandbox: true` until you have watched it
+run end-to-end. Telegram approval/alerts require a token in `.env` and a
+non-empty `telegram.allowed_chat_ids`.
+
 ## Architecture (target)
 
 ```
@@ -223,10 +257,11 @@ Modules (those marked ✅ exist as of Step 1):
 - `execution/` ✅ — fee-aware, maker-first placement; slippage guard; paper + live brokers; pipeline.
 - `events/` ✅ — economic-calendar event-risk + news/volatility kill-switch + combined posture.
 - `approval/` ✅ — Telegram approve/reject workflow, runtime settings, status, controls.
-- `app/` ✅ — latency/heartbeat monitor with auto-suspend (main-loop assembly pending).
+- `app/` ✅ — heartbeat monitor, position tracker, trade-only-key self-check, live runner.
 - `backtest/` ✅ — zero-look-ahead engine, out-of-sample split, net-of-fees report.
+- `store/` ✅ — SQLite (SQLAlchemy) trade log, daily counters, trading-enabled flag.
+- `reporting/` ✅ — weekly performance report vs market benchmark.
 - `regime/` — optional slow uncertainty/sentiment overlay.
-- `store/` — SQLite (SQLAlchemy) models & queries.
 
 ---
 
@@ -237,8 +272,8 @@ Modules (those marked ✅ exist as of Step 1):
 3. **✅ Execution layer with paper mode (maker-first, slippage guard); full dry-run pipeline.**
 4. **✅ Event-risk module + news/volatility kill-switch + tests.**
 5. **✅ Telegram bot: alerts, approve/reject, `/settings` menu, status, pause/resume, auth allowlist.**
-6. **✅ Latency/heartbeat auto-suspend; backtesting + out-of-sample validation net of fees.** ← you are here
-7. Live sandbox end-to-end with manual approval.
+6. **✅ Latency/heartbeat auto-suspend; backtesting + out-of-sample validation net of fees.**
+7. **✅ Live sandbox runner end-to-end (position tracking, SQLite, weekly report, trade-only-key self-check).** ← you are here
 8. Deployment artifacts (Dockerfile, compose, systemd) + full README.
 
 ---
