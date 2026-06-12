@@ -55,23 +55,39 @@ def _strip_html(text: str, max_len: int = 400) -> str:
     return BeautifulSoup(text, "lxml").get_text(separator=" ", strip=True)[:max_len]
 
 
-def _extract_image(entry: Any) -> str:
-    """Extract the first usable image URL from a feed entry."""
-    for attr in ("media_thumbnail", "media_content"):
-        items = getattr(entry, attr, None)
-        if items and isinstance(items, list):
-            url = items[0].get("url", "")
-            if url:
-                return url
-    for enc in getattr(entry, "enclosures", []):
-        if enc.get("type", "").startswith("image/"):
-            return enc.get("href", "") or enc.get("url", "")
-    # fall back to first <img> in summary HTML
-    summary = getattr(entry, "summary", "") or ""
-    if "<img" in summary:
-        img = BeautifulSoup(summary, "lxml").find("img")
-        if img and img.get("src"):
-            return img["src"]
+async def fetch_article_image(url: str) -> str:
+    """Follow the Google News redirect and extract og:image from the real article page.
+
+    Reads only the first 60 KB so the <head> is always covered without
+    downloading the full article body.
+    """
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(
+                url, headers=_HEADERS,
+                timeout=aiohttp.ClientTimeout(total=6, connect=3),
+                allow_redirects=True,
+                ssl=False,
+            ) as resp:
+                if resp.status != 200:
+                    return ""
+                raw = b""
+                async for chunk in resp.content.iter_chunked(8192):
+                    raw += chunk
+                    if len(raw) >= 60_000:
+                        break
+                html = raw.decode("utf-8", errors="ignore")
+                soup = BeautifulSoup(html, "lxml")
+                for attrs in (
+                    {"property": "og:image"},
+                    {"name":     "twitter:image"},
+                    {"name":     "twitter:image:src"},
+                ):
+                    tag = soup.find("meta", attrs)
+                    if tag and tag.get("content", "").startswith("http"):
+                        return tag["content"].strip()
+    except Exception as exc:
+        logger.debug("fetch_article_image failed (%s): %s", url, exc)
     return ""
 
 
@@ -163,7 +179,6 @@ async def fetch_team_news(
                     "source_name":   source_name,
                     "published_at":  _parse_date(entry),
                     "original_lang": lang,
-                    "image_url":     _extract_image(entry),
                 })
 
     all_news.sort(key=lambda x: x["published_at"], reverse=True)
