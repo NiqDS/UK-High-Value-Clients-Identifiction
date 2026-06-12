@@ -53,6 +53,10 @@ strategy:
   take_profit_pct: 1.5              # target move; MUST exceed round-trip fees + margin
   stop_loss_pct: 1.0                # stop distance (drives the per-trade risk cap)
   target_notional_quote: 40.0       # proposed size per signal (risk engine still caps it)
+  # Valuation filter — weighted-average-cost (VWAP) over/under-valuation:
+  vwap_filter_enabled: true         # only buy when not richly overvalued vs VWAP
+  vwap_window: 50                   # bars used to compute the volume-weighted average cost
+  max_overvaluation_pct: 1.0        # skip a buy whose price is >this% above VWAP (overvalued)
 
 # --- Scheduled macro events (FOMC, CPI, PPI, NFP...). Manage exposure, not direction.
 events:

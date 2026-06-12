@@ -37,7 +37,11 @@ What works today:
   post-trade free balance — a breach flips a persistent halt flag). Rolling
   daily counters with a configurable UTC reset boundary.
 - A reference **SMA-crossover strategy** that emits `OrderIntent`s (BUY entries
-  with take-profit + stop; SELL exits) — pluggable via `strategy.name`.
+  with take-profit + stop; SELL exits) — pluggable via `strategy.name`. It also
+  applies a **weighted-average-cost (VWAP) valuation filter**: it gauges
+  over/under-valuation (price vs VWAP) and **skips buys that are richly
+  overvalued** (> `max_overvaluation_pct` above VWAP). The assessment is shown
+  in the Telegram approval message; the intermediate calculation is not logged.
 - The **execution layer**: maker-first passive pricing (orders rest as makers),
   taker only when `allow_taker_fallback` is on, a pre-placement **slippage
   guard**, and fee-aware fills. A **paper broker** (idempotent by client order

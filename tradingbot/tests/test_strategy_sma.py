@@ -8,26 +8,31 @@ from tradingbot.config import StrategyConfig
 from tradingbot.domain import Side
 from tradingbot.exchange.models import Candle, Ticker
 from tradingbot.strategy.base import MarketData
-from tradingbot.strategy.sma import SmaCrossoverStrategy, sma
+from tradingbot.strategy.sma import SmaCrossoverStrategy, sma, vwap
 
 
-def candles(closes: list[float]) -> list[Candle]:
-    return [Candle(timestamp=i, open=c, high=c, low=c, close=c, volume=1.0)
-            for i, c in enumerate(closes)]
+def candles(closes: list[float], volumes: list[float] | None = None) -> list[Candle]:
+    vols = volumes or [1.0] * len(closes)
+    return [Candle(timestamp=i, open=c, high=c, low=c, close=c, volume=v)
+            for i, (c, v) in enumerate(zip(closes, vols))]
 
 
-def market(closes: list[float]) -> MarketData:
+def market(closes: list[float], volumes: list[float] | None = None) -> MarketData:
     last = closes[-1]
     return MarketData(
         symbol="BTC/USD",
-        candles=candles(closes),
+        candles=candles(closes, volumes),
         ticker=Ticker("BTC/USD", bid=last, ask=last, last=last,
                       base_volume=1, quote_volume=1, timestamp=0),
     )
 
 
-def strat() -> SmaCrossoverStrategy:
-    return SmaCrossoverStrategy(StrategyConfig(fast_period=2, slow_period=3))
+def strat(vwap_filter: bool = False, max_overvaluation_pct: float = 1.0) -> SmaCrossoverStrategy:
+    # crossover tests disable the VWAP filter to isolate crossover logic
+    return SmaCrossoverStrategy(StrategyConfig(
+        fast_period=2, slow_period=3,
+        vwap_filter_enabled=vwap_filter, max_overvaluation_pct=max_overvaluation_pct,
+    ))
 
 
 def test_sma_helper() -> None:
@@ -47,6 +52,44 @@ def test_bullish_crossover_emits_buy_entry() -> None:
     assert s.take_profit_price == pytest.approx(12 * 1.015)
     assert s.stop_price == pytest.approx(12 * 0.99)
     assert s.amount == pytest.approx(40.0 / 12)  # target_notional / price
+    # valuation metadata always attached for the Telegram message
+    assert "vwap" in s.metadata and "valuation" in s.metadata
+
+
+# --- VWAP weighted-average-cost valuation ----------------------------------
+def test_vwap_weights_by_volume() -> None:
+    # two bars: price 100 (vol 1) and 200 (vol 9) -> VWAP pulled toward 200
+    cs = candles([100, 200], volumes=[1, 9])
+    assert vwap(cs, window=2) == pytest.approx((100 * 1 + 200 * 9) / 10)
+
+
+def test_vwap_falls_back_to_mean_without_volume() -> None:
+    cs = candles([100, 110, 120], volumes=[0, 0, 0])
+    assert vwap(cs, window=3) == pytest.approx((100 + 110 + 120) / 3)
+
+
+def test_overvalued_bullish_entry_is_skipped() -> None:
+    # bullish cross but last price (12) sits ~30% above VWAP (~9.2) -> filtered
+    s = strat(vwap_filter=True, max_overvaluation_pct=1.0)
+    assert s.generate_signals(market([10, 9, 8, 7, 12])) == []
+
+
+def test_undervalued_bullish_entry_passes_filter() -> None:
+    # construct a bullish cross where the entry price is at/below VWAP
+    # closes: downtrend then a small up-tick that crosses but stays cheap
+    s = strat(vwap_filter=True, max_overvaluation_pct=1.0)
+    sigs = s.generate_signals(market([120, 118, 90, 88, 100]))
+    assert len(sigs) == 1
+    assert sigs[0].side is Side.BUY
+    assert sigs[0].metadata["valuation"] in ("undervalued", "fair")
+
+
+def test_sell_exit_carries_valuation_but_is_not_filtered() -> None:
+    s = strat(vwap_filter=True)
+    sigs = s.generate_signals(market([7, 8, 9, 10, 5]))
+    assert len(sigs) == 1
+    assert sigs[0].side is Side.SELL
+    assert "valuation" in sigs[0].metadata
 
 
 def test_bearish_crossover_emits_sell_exit() -> None:

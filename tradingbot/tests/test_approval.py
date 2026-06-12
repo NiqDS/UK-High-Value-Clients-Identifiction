@@ -109,3 +109,13 @@ def test_render_flags_below_floor() -> None:
     d.projected_free_quote = 10.0  # below default floor 1000
     msg = render_approval_message(Config(), intent(), d)
     assert "BELOW FLOOR" in msg
+
+
+def test_render_includes_vwap_valuation_when_present() -> None:
+    i = OrderIntent(symbol="BTC/USD", side=Side.BUY, amount=0.4, price=100.0,
+                    take_profit_price=102.0,
+                    metadata={"vwap": 98.5, "valuation_pct": 1.52, "valuation": "overvalued"})
+    msg = render_approval_message(Config(), i, decision())
+    assert "VWAP (wtd avg cost): 98.50" in msg
+    assert "overvalued" in msg
+    assert "+1.52%" in msg

@@ -139,6 +139,10 @@ class StrategyConfig(BaseModel):
     take_profit_pct: float = _pct(1.5)
     stop_loss_pct: float = _pct(1.0)
     target_notional_quote: float = Field(default=40.0, gt=0.0)
+    # Valuation filter: weighted-average-cost (VWAP) over/under-valuation.
+    vwap_filter_enabled: bool = True
+    vwap_window: int = Field(default=50, gt=0)
+    max_overvaluation_pct: float = Field(default=1.0, ge=0.0)  # skip buys priced this far above VWAP
 
     @model_validator(mode="after")
     def _check_periods(self) -> "StrategyConfig":
