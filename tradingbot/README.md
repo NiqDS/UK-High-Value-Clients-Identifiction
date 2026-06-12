@@ -38,10 +38,17 @@ What works today:
   daily counters with a configurable UTC reset boundary.
 - A reference **SMA-crossover strategy** that emits `OrderIntent`s (BUY entries
   with take-profit + stop; SELL exits) — pluggable via `strategy.name`. It also
-  applies a **weighted-average-cost (VWAP) valuation filter**: it gauges
-  over/under-valuation (price vs VWAP) and **skips buys that are richly
-  overvalued** (> `max_overvaluation_pct` above VWAP). The assessment is shown
-  in the Telegram approval message; the intermediate calculation is not logged.
+  applies a **weighted-average-cost (VWAP) valuation filter**:
+  - **buy floor** — enter only when price is at/below `buy_valuation_floor_pct`
+    vs VWAP (i.e. undervalued); richer prices are skipped;
+  - **force-exit ceiling** — when a held position runs above
+    `force_exit_overvaluation_pct` over VWAP, it is **force-exited immediately**
+    (emergency market order that crosses the spread, bypassing approval and the
+    slippage guard) and an **emergency Telegram alert** is sent.
+
+  Both thresholds are adjustable at runtime from Telegram (`/set_buy_floor`,
+  `/set_force_exit`). The valuation is shown in the approval message; the
+  intermediate calculation is deliberately not logged.
 - The **execution layer**: maker-first passive pricing (orders rest as makers),
   taker only when `allow_taker_fallback` is on, a pre-placement **slippage
   guard**, and fee-aware fills. A **paper broker** (idempotent by client order
@@ -169,7 +176,9 @@ also require a passphrase → `EXCHANGE_API_PASSWORD`.
    *every* trade needs approval.
 
 Commands once running: `/status`, `/settings` (alias `/menu`), `/set_threshold`,
-`/set_max_notional`, `/set_max_trades`, `/set_daily_loss`, `/pause`, `/resume`.
+`/set_max_notional`, `/set_max_trades`, `/set_daily_loss`, `/set_buy_floor`
+(undervaluation floor for entries), `/set_force_exit` (overvaluation ceiling
+for emergency exits), `/pause`, `/resume`.
 Approval messages carry symbol, side, size, est. price, notional, est.
 round-trip fees, net-of-fee target, and projected balance vs floor, with inline
 **Approve / Reject** buttons. No tap before the timeout ⇒ **auto-reject**.

@@ -149,7 +149,10 @@ class Backtester:
             equity_curve.append(cash + (pos.units * bar.close if pos else 0.0))
 
             # 4. generate signals using ONLY data up to and including this bar
-            md = MarketData(symbol=symbol, candles=candles[: i + 1], ticker=_ticker_at(symbol, bar.close))
+            md = MarketData(
+                symbol=symbol, candles=candles[: i + 1],
+                ticker=_ticker_at(symbol, bar.close), holding=pos is not None,
+            )
             signals = strategy.generate_signals(md)
             if signals:
                 s = signals[0]

@@ -14,9 +14,10 @@ Signals:
 Valuation criterion (weighted average cost):
   Every signal also assesses over/under-valuation against the VWAP — the
   volume-weighted average price, i.e. the weighted average cost the market has
-  paid over the window. Price below VWAP = undervalued; above = overvalued. A
-  bullish entry that is richly overvalued (more than ``max_overvaluation_pct``
-  above VWAP) is skipped — don't buy what the market is already paying up for.
+  paid over the window. Price below VWAP = undervalued; above = overvalued.
+  BUY only at/below the undervaluation floor (``buy_valuation_floor_pct`` vs
+  VWAP); FORCE-EXIT a held position (emergency market order) once it runs above
+  the overvaluation ceiling (``force_exit_overvaluation_pct`` above VWAP).
   The assessment rides along on the intent (for the Telegram message); the
   intermediate calculation is deliberately not logged.
 """
@@ -93,9 +94,30 @@ class SmaCrossoverStrategy(Strategy):
             "valuation": _valuation_label(valuation_pct),
         }
 
+        # FORCE EXIT: a held position that has run too far above its weighted
+        # average cost is exited immediately (emergency), regardless of crossover.
+        if (
+            cfg.vwap_filter_enabled
+            and market.holding
+            and valuation_pct >= cfg.force_exit_overvaluation_pct
+        ):
+            return [
+                OrderIntent(
+                    symbol=market.symbol,
+                    side=Side.SELL,
+                    amount=cfg.target_notional_quote / price,
+                    order_type=OrderType.MARKET,  # cross the spread to exit now
+                    price=price,
+                    is_entry=False,
+                    reason=f"force exit: overvalued {valuation_pct:+.2f}% >= "
+                           f"{cfg.force_exit_overvaluation_pct}% ceiling",
+                    metadata={**valuation_meta, "emergency": True},
+                )
+            ]
+
         if bullish:
-            # Don't buy what's already richly overvalued vs its weighted avg cost.
-            if cfg.vwap_filter_enabled and valuation_pct > cfg.max_overvaluation_pct:
+            # BUY only when sufficiently undervalued: price at/below the floor vs VWAP.
+            if cfg.vwap_filter_enabled and valuation_pct > cfg.buy_valuation_floor_pct:
                 return []
             amount = cfg.target_notional_quote / price
             return [

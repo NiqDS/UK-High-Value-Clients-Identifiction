@@ -26,6 +26,8 @@ logger = logging.getLogger(__name__)
 
 # (intent, decision) -> approved?  May be async.
 Approver = Callable[[OrderIntent, RiskDecision], Awaitable[bool]]
+# async (text) -> None  — used to push emergency force-exit alerts
+AlertHook = Callable[[str], Awaitable[None]]
 
 
 async def auto_approve(intent: OrderIntent, decision: RiskDecision) -> bool:
@@ -65,6 +67,7 @@ class TradingPipeline:
         approver: Approver | None = None,
         posture_provider: PostureProvider | None = None,
         health: HealthGate | None = None,
+        emergency_alert: AlertHook | None = None,
     ) -> None:
         self.config = config
         self.engine = engine
@@ -73,6 +76,7 @@ class TradingPipeline:
         self.approver = approver
         self.posture_provider = posture_provider
         self.health = health
+        self.emergency_alert = emergency_alert
 
     async def process(self, intent: OrderIntent, snapshot: AccountSnapshot) -> PipelineResult:
         # Connection health first: a degraded/disconnected session auto-suspends
@@ -110,7 +114,14 @@ class TradingPipeline:
         if not decision.approved:
             return PipelineResult(intent, decision, Outcome.REJECTED_BY_RISK)
 
-        if decision.requires_approval:
+        # Emergency force-exit: alert immediately and bypass the approval step —
+        # it is protective, like the kill switch, and must not wait for a tap.
+        emergency = bool(intent.metadata.get("emergency"))
+        if emergency and self.emergency_alert is not None:
+            from ..approval.messages import render_emergency_exit_message
+            await self.emergency_alert(render_emergency_exit_message(self.config, intent, decision))
+
+        if decision.requires_approval and not emergency:
             if self.approver is None:
                 logger.info("Intent requires approval; no approver wired — holding")
                 return PipelineResult(intent, decision, Outcome.PENDING_APPROVAL)

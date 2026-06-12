@@ -17,21 +17,24 @@ def candles(closes: list[float], volumes: list[float] | None = None) -> list[Can
             for i, (c, v) in enumerate(zip(closes, vols))]
 
 
-def market(closes: list[float], volumes: list[float] | None = None) -> MarketData:
+def market(closes: list[float], volumes: list[float] | None = None,
+           holding: bool = False) -> MarketData:
     last = closes[-1]
     return MarketData(
         symbol="BTC/USD",
         candles=candles(closes, volumes),
         ticker=Ticker("BTC/USD", bid=last, ask=last, last=last,
                       base_volume=1, quote_volume=1, timestamp=0),
+        holding=holding,
     )
 
 
-def strat(vwap_filter: bool = False, max_overvaluation_pct: float = 1.0) -> SmaCrossoverStrategy:
+def strat(vwap_filter: bool = False, buy_floor: float = 1.0,
+          force_exit: float = 3.0) -> SmaCrossoverStrategy:
     # crossover tests disable the VWAP filter to isolate crossover logic
     return SmaCrossoverStrategy(StrategyConfig(
-        fast_period=2, slow_period=3,
-        vwap_filter_enabled=vwap_filter, max_overvaluation_pct=max_overvaluation_pct,
+        fast_period=2, slow_period=3, vwap_filter_enabled=vwap_filter,
+        buy_valuation_floor_pct=buy_floor, force_exit_overvaluation_pct=force_exit,
     ))
 
 
@@ -69,15 +72,14 @@ def test_vwap_falls_back_to_mean_without_volume() -> None:
 
 
 def test_overvalued_bullish_entry_is_skipped() -> None:
-    # bullish cross but last price (12) sits ~30% above VWAP (~9.2) -> filtered
-    s = strat(vwap_filter=True, max_overvaluation_pct=1.0)
+    # bullish cross but last price (12) sits ~30% above VWAP (~9.2) -> above floor
+    s = strat(vwap_filter=True, buy_floor=1.0)
     assert s.generate_signals(market([10, 9, 8, 7, 12])) == []
 
 
-def test_undervalued_bullish_entry_passes_filter() -> None:
-    # construct a bullish cross where the entry price is at/below VWAP
-    # closes: downtrend then a small up-tick that crosses but stays cheap
-    s = strat(vwap_filter=True, max_overvaluation_pct=1.0)
+def test_undervalued_bullish_entry_passes_floor() -> None:
+    # bullish cross where the entry price is at/below VWAP (undervalued)
+    s = strat(vwap_filter=True, buy_floor=1.0)
     sigs = s.generate_signals(market([120, 118, 90, 88, 100]))
     assert len(sigs) == 1
     assert sigs[0].side is Side.BUY
@@ -90,6 +92,31 @@ def test_sell_exit_carries_valuation_but_is_not_filtered() -> None:
     assert len(sigs) == 1
     assert sigs[0].side is Side.SELL
     assert "valuation" in sigs[0].metadata
+
+
+# --- force exit on the overvaluation ceiling -------------------------------
+def test_force_exit_when_holding_and_overvalued() -> None:
+    # holding a position; price (110) is ~7.8% above VWAP (~102), ceiling 3%
+    s = strat(vwap_filter=True, force_exit=3.0)
+    sigs = s.generate_signals(market([100, 100, 100, 100, 110], holding=True))
+    assert len(sigs) == 1
+    e = sigs[0]
+    assert e.side is Side.SELL and e.is_entry is False
+    assert e.metadata.get("emergency") is True
+    assert e.order_type.value == "market"  # crosses the spread to exit now
+
+
+def test_no_force_exit_when_flat() -> None:
+    # same overvalued bar but no open position -> no emergency exit
+    s = strat(vwap_filter=True, force_exit=3.0, buy_floor=1.0)
+    sigs = s.generate_signals(market([100, 100, 100, 100, 110], holding=False))
+    assert all(not sig.metadata.get("emergency") for sig in sigs)
+
+
+def test_force_exit_disabled_when_filter_off() -> None:
+    s = strat(vwap_filter=False, force_exit=3.0)
+    sigs = s.generate_signals(market([100, 100, 100, 100, 110], holding=True))
+    assert all(not sig.metadata.get("emergency") for sig in sigs)
 
 
 def test_bearish_crossover_emits_sell_exit() -> None:

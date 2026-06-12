@@ -142,7 +142,12 @@ class StrategyConfig(BaseModel):
     # Valuation filter: weighted-average-cost (VWAP) over/under-valuation.
     vwap_filter_enabled: bool = True
     vwap_window: int = Field(default=50, gt=0)
-    max_overvaluation_pct: float = Field(default=1.0, ge=0.0)  # skip buys priced this far above VWAP
+    # Buy only when price is at/below this % vs VWAP (the undervaluation floor;
+    # 0 = buy only at/below the weighted average cost). Lower = stricter.
+    buy_valuation_floor_pct: float = Field(default=0.0)
+    # Force-exit an open position (+ emergency alert) when its price rises this
+    # far above VWAP (the overvaluation ceiling).
+    force_exit_overvaluation_pct: float = Field(default=3.0, gt=0.0)
 
     @model_validator(mode="after")
     def _check_periods(self) -> "StrategyConfig":

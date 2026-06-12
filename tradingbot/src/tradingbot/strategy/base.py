@@ -19,6 +19,7 @@ class MarketData:
     symbol: str
     candles: list[Candle] = field(default_factory=list)
     ticker: Ticker | None = None
+    holding: bool = False  # True when a position is currently open (enables force-exit)
 
     @property
     def closes(self) -> list[float]:

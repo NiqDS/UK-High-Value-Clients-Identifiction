@@ -54,22 +54,24 @@ class Executor:
         reference = decision.est_price or (best_ask if intent.side == Side.BUY else best_bid)
 
         is_market = intent.order_type is OrderType.MARKET
-        use_maker = fees.maker_first and not is_market
+        emergency = bool(intent.metadata.get("emergency"))
+        # Emergency exits cross the spread to get out now, regardless of maker policy.
+        use_maker = fees.maker_first and not is_market and not emergency
 
         if use_maker:
             role = LiquidityRole.MAKER
             price = self._maker_price(intent.side, best_bid, best_ask, extra_maker_offset_pct)
             order_type = OrderType.LIMIT
         else:
-            # taker path — only allowed when configured
-            if not fees.allow_taker_fallback:
+            # taker path — only allowed when configured, or for an emergency exit
+            if not fees.allow_taker_fallback and not emergency:
                 return ExecutionResult(
                     ExecStatus.REJECTED, None,
                     reason="taker order required but allow_taker_fallback is false",
                 )
             role = LiquidityRole.TAKER
             price = best_ask if intent.side == Side.BUY else best_bid
-            order_type = intent.order_type
+            order_type = OrderType.MARKET if is_market else intent.order_type
 
         return Order(
             client_order_id=client_order_id,
@@ -98,6 +100,11 @@ class Executor:
             logger.info("Execution rejected: %s", built.reason)
             return built
         order = built
+
+        # Emergency exits must not be blocked by the slippage guard — getting out
+        # now matters more than the fill price.
+        if bool(intent.metadata.get("emergency")):
+            return await self.broker.place_order(order)
 
         if not self._slippage_ok(order):
             dev = abs(order.price - order.reference_price) / order.reference_price * 100.0

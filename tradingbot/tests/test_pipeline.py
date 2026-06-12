@@ -92,6 +92,30 @@ async def test_requires_approval_denied() -> None:
     assert store.get_daily_counters(NOW).trades == 0
 
 
+async def test_emergency_exit_bypasses_approval_and_alerts() -> None:
+    # threshold 0 => normally everything needs approval and would be HELD (no
+    # approver); an emergency force-exit must execute anyway and fire an alert.
+    cfg = make_config(approval_threshold=0.0)
+    store = InMemoryRiskStateStore()
+    engine = RiskEngine(cfg, store)
+    executor = Executor(cfg, PaperBroker(cfg.fees))
+    alerts: list[str] = []
+
+    async def alert(text: str) -> None:
+        alerts.append(text)
+
+    pipeline = TradingPipeline(cfg, engine, executor, store, approver=None, emergency_alert=alert)
+    emergency = OrderIntent(
+        symbol="BTC/USD", side=Side.SELL, amount=0.4, order_type=OrderType.MARKET,
+        price=100.0, is_entry=False,
+        metadata={"emergency": True, "vwap": 95.0, "valuation_pct": 5.2, "valuation": "overvalued"},
+    )
+    res = await pipeline.process(emergency, snapshot())
+    assert res.outcome is Outcome.EXECUTED
+    assert res.execution.filled
+    assert len(alerts) == 1 and "EMERGENCY" in alerts[0]
+
+
 async def test_process_signals_handles_multiple() -> None:
     pipeline, _ = build(approval_threshold=1000.0)
     results = await pipeline.process_signals(

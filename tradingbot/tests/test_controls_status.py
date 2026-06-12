@@ -49,6 +49,20 @@ def test_set_max_notional_rejects_below_min() -> None:
         ctrl.set_max_notional(10)
 
 
+def test_set_buy_valuation_floor_allows_negative() -> None:
+    ctrl, cfg, _, _ = make()
+    ctrl.set_buy_valuation_floor(-0.5)  # require 0.5% discount to VWAP
+    assert cfg.strategy.buy_valuation_floor_pct == -0.5
+
+
+def test_set_force_exit_updates_and_rejects_non_positive() -> None:
+    ctrl, cfg, _, _ = make()
+    ctrl.set_force_exit_overvaluation(2.5)
+    assert cfg.strategy.force_exit_overvaluation_pct == 2.5
+    with pytest.raises(ValueError):
+        ctrl.set_force_exit_overvaluation(0)
+
+
 def test_pause_and_resume_toggle_trading_and_kill_switch() -> None:
     ctrl, _, store, ks = make()
     ctrl.pause_trading()
@@ -75,12 +89,16 @@ def test_overrides_persist_and_reapply(tmp_path) -> None:
     ctrl = SettingsController(cfg, state, overrides=overrides)
     ctrl.set_approval_threshold(123.0)
     ctrl.set_max_trades_per_day(7)
+    ctrl.set_buy_valuation_floor(-0.5)
+    ctrl.set_force_exit_overvaluation(4.0)
 
     # a fresh config re-applies the saved overrides (survives "restart")
     fresh = Config()
     JsonOverrideStore(store_file).apply(fresh)
     assert fresh.telegram.approval_threshold_quote == 123.0
     assert fresh.risk.max_trades_per_day == 7
+    assert fresh.strategy.buy_valuation_floor_pct == -0.5
+    assert fresh.strategy.force_exit_overvaluation_pct == 4.0
 
 
 def test_pause_persists_disabled_flag(tmp_path) -> None:

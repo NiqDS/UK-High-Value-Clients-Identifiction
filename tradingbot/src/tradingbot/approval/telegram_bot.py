@@ -148,6 +148,10 @@ class TelegramApprovalBot:
             "set_max_trades", self._make_setter(self.settings.set_max_trades_per_day, "max trades/day", int)))
         app.add_handler(CommandHandler(
             "set_daily_loss", self._make_setter(self.settings.set_max_daily_loss, "max daily loss", float)))
+        app.add_handler(CommandHandler(
+            "set_buy_floor", self._make_setter(self.settings.set_buy_valuation_floor, "buy valuation floor %", float)))
+        app.add_handler(CommandHandler(
+            "set_force_exit", self._make_setter(self.settings.set_force_exit_overvaluation, "force-exit ceiling %", float)))
         app.add_handler(CallbackQueryHandler(self._on_callback))
         self._app = app
         return app

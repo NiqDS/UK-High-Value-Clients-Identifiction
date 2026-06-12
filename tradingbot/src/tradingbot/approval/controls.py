@@ -47,12 +47,16 @@ class JsonOverrideStore:
         ov = self.load()
         tg = ov.get("telegram", {})
         risk = ov.get("risk", {})
+        strat = ov.get("strategy", {})
         app = ov.get("app", {})
         if "approval_threshold_quote" in tg:
             config.telegram.approval_threshold_quote = tg["approval_threshold_quote"]
         for key in ("max_notional_per_trade_quote", "max_trades_per_day", "max_daily_loss_quote"):
             if key in risk:
                 setattr(config.risk, key, risk[key])
+        for key in ("buy_valuation_floor_pct", "force_exit_overvaluation_pct"):
+            if key in strat:
+                setattr(config.strategy, key, strat[key])
         if "trading_enabled" in app:
             config.app.trading_enabled = app["trading_enabled"]
 
@@ -85,6 +89,10 @@ class SettingsController:
                     "max_notional_per_trade_quote": self.config.risk.max_notional_per_trade_quote,
                     "max_trades_per_day": self.config.risk.max_trades_per_day,
                     "max_daily_loss_quote": self.config.risk.max_daily_loss_quote,
+                },
+                "strategy": {
+                    "buy_valuation_floor_pct": self.config.strategy.buy_valuation_floor_pct,
+                    "force_exit_overvaluation_pct": self.config.strategy.force_exit_overvaluation_pct,
                 },
                 "app": {"trading_enabled": self.store.is_trading_enabled()},
             }
@@ -121,6 +129,20 @@ class SettingsController:
         self._persist()
         return value
 
+    def set_buy_valuation_floor(self, value: float) -> float:
+        """Buy only when price is at/below this % vs VWAP (undervaluation floor)."""
+        self.config.strategy.buy_valuation_floor_pct = float(value)
+        self._persist()
+        return value
+
+    def set_force_exit_overvaluation(self, value: float) -> float:
+        """Force-exit ceiling: sell when price runs this % above VWAP."""
+        if value <= 0:
+            raise ValueError("force-exit overvaluation must be > 0")
+        self.config.strategy.force_exit_overvaluation_pct = float(value)
+        self._persist()
+        return value
+
     # -- kill switch / trading flag ----------------------------------------
     def pause_trading(self, reason: str = "manual pause via Telegram") -> None:
         self.store.set_trading_enabled(False, reason)
@@ -140,5 +162,7 @@ class SettingsController:
             "max_notional_per_trade_quote": self.config.risk.max_notional_per_trade_quote,
             "max_trades_per_day": self.config.risk.max_trades_per_day,
             "max_daily_loss_quote": self.config.risk.max_daily_loss_quote,
+            "buy_valuation_floor_pct": self.config.strategy.buy_valuation_floor_pct,
+            "force_exit_overvaluation_pct": self.config.strategy.force_exit_overvaluation_pct,
             "trading_enabled": self.store.is_trading_enabled(),
         }

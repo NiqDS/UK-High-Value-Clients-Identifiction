@@ -55,6 +55,19 @@ def render_approval_message(config: Config, intent: OrderIntent, decision: RiskD
     return "\n".join(lines)
 
 
+def render_emergency_exit_message(config: Config, intent: OrderIntent, decision: RiskDecision) -> str:
+    quote = config.exchange.quote_currency
+    meta = intent.metadata or {}
+    return (
+        "🚨 *EMERGENCY FORCE-EXIT*\n"
+        f"`{intent.side.value.upper()} {intent.symbol}` (overvaluation ceiling hit)\n"
+        f"VWAP (wtd avg cost): {_fmt(meta.get('vwap'), 4)} {quote}\n"
+        f"valuation: {meta.get('valuation_pct', 0.0):+.2f}% ({meta.get('valuation', '')})\n"
+        f"size: {intent.amount:.8f}  est. price: {_fmt(decision.est_price, 4)} {quote}\n"
+        f"reason: {intent.reason}"
+    )
+
+
 def render_settings(settings: dict, quote: str = "USD") -> str:
     return (
         "⚙️ *Settings*\n"
@@ -63,9 +76,12 @@ def render_settings(settings: dict, quote: str = "USD") -> str:
         f"max notional/trade: {settings['max_notional_per_trade_quote']:.2f} {quote}\n"
         f"max trades/day: {settings['max_trades_per_day']}\n"
         f"max daily loss: {settings['max_daily_loss_quote']:.2f} {quote}\n"
+        f"buy valuation floor: {settings['buy_valuation_floor_pct']:+.2f}% vs VWAP\n"
+        f"force-exit ceiling: {settings['force_exit_overvaluation_pct']:.2f}% above VWAP\n"
         f"trading enabled: {settings['trading_enabled']}\n\n"
         "Change with:\n"
         "`/set_threshold <amt>`  `/set_max_notional <amt>`\n"
         "`/set_max_trades <n>`  `/set_daily_loss <amt>`\n"
+        "`/set_buy_floor <pct>`  `/set_force_exit <pct>`\n"
         "`/pause`  `/resume`"
     )
