@@ -12,13 +12,14 @@ setting defaults to its most conservative value.
 
 ---
 
-## ⚠️ Build status — Step 4 of 8
+## ⚠️ Build status — Step 5 of 8
 
 Delivered so far: **scaffold + read-only adapter** (Step 1), the **hard risk
 engine** (Step 2), the **execution layer + reference strategy + dry-run
-pipeline** (Step 3), and the **event-risk module + news/volatility kill-switch**
-(Step 4). Telegram approval, latency monitor, and backtesting are **not built
-yet** — see [Build order](#build-order). Do not run this against real funds.
+pipeline** (Step 3), the **event-risk module + news/volatility kill-switch**
+(Step 4), and the **Telegram approval bot + runtime controls** (Step 5). The
+latency/heartbeat monitor and backtesting are **not built yet** — see
+[Build order](#build-order). Do not run this against real funds.
 
 What works today:
 
@@ -51,13 +52,21 @@ What works today:
   that halts new entries on an abnormal N-sigma price-velocity or volume spike
   and resumes only after a cooldown of normalised volatility (or manual resume).
   It never auto-trades the direction of a shock.
+- The **Telegram approval bot**: trade alerts with inline **Approve / Reject**
+  buttons and a **timeout auto-reject**; a `/status` report (balance, floor,
+  daily counters, event-risk + kill-switch state); `/settings` with runtime
+  `/set_threshold`, `/set_max_notional`, `/set_max_trades`, `/set_daily_loss`;
+  `/pause` + `/resume` (kill switch); a **chat-ID allowlist** (empty ⇒ nobody
+  authorised); and JSON-persisted runtime overrides so changes — and a manual
+  pause — survive a restart.
 - Structured logging with **secret redaction**.
 - `check-config`, `healthcheck`, and `paper-run` CLI commands (`paper-run`
   never places live orders).
-- A network-free unit-test suite (**89 tests**: config, adapter, risk state,
+- A network-free unit-test suite (**108 tests**: config, adapter, risk state,
   one per risk gate, floor-halt, approval routing, strategy signals, execution
   pricing/slippage/idempotency, the full pipeline, event windows + transitions,
-  kill-switch trigger/cooldown/manual-resume, and posture integration).
+  kill-switch trigger/cooldown/manual-resume, posture integration, and the
+  approval workflow — approve/reject/timeout, settings, persistence, status).
 
 ---
 
@@ -129,6 +138,26 @@ also require a passphrase → `EXCHANGE_API_PASSWORD`.
 
 ---
 
+## Telegram approval bot
+
+1. Create a bot with [@BotFather](https://t.me/BotFather) (`/newbot`) and copy
+   the token into `.env` as `TELEGRAM_BOT_TOKEN`. **Never commit the token** —
+   if it leaks, `/revoke` it in BotFather and replace it.
+2. Find your numeric chat/user ID (e.g. via @userinfobot) and add it to
+   `telegram.allowed_chat_ids` in `config.yaml`. **An empty allowlist authorises
+   nobody** (conservative default) — the bot ignores every other chat.
+3. Set `telegram.approval_threshold_quote`: trades at/above it require a manual
+   tap; below it auto-execute (still through the full risk engine). `0.0` means
+   *every* trade needs approval.
+
+Commands once running: `/status`, `/settings` (alias `/menu`), `/set_threshold`,
+`/set_max_notional`, `/set_max_trades`, `/set_daily_loss`, `/pause`, `/resume`.
+Approval messages carry symbol, side, size, est. price, notional, est.
+round-trip fees, net-of-fee target, and projected balance vs floor, with inline
+**Approve / Reject** buttons. No tap before the timeout ⇒ **auto-reject**.
+Runtime changes (and a manual pause) persist to `runtime_overrides.json` so a
+restart does not silently resume.
+
 ## Architecture (target)
 
 ```
@@ -146,8 +175,8 @@ Modules (those marked ✅ exist as of Step 1):
 - `strategy/` ✅ — pluggable `generate_signals() -> list[OrderIntent]` (reference SMA crossover).
 - `execution/` ✅ — fee-aware, maker-first placement; slippage guard; paper + live brokers; pipeline.
 - `events/` ✅ — economic-calendar event-risk + news/volatility kill-switch + combined posture.
+- `approval/` ✅ — Telegram approve/reject workflow, runtime settings, status, controls.
 - `regime/` — optional slow uncertainty/sentiment overlay.
-- `approval/` — Telegram approve/reject workflow.
 - `store/` — SQLite (SQLAlchemy) models & queries.
 - `app/` — wiring, main loop, graceful shutdown, kill switch.
 
@@ -158,8 +187,8 @@ Modules (those marked ✅ exist as of Step 1):
 1. **✅ Scaffold, config, read-only exchange adapter (sandbox).**
 2. **✅ Risk engine + tests (floor, limits, daily counters, fee gate, min-notional/spread).**
 3. **✅ Execution layer with paper mode (maker-first, slippage guard); full dry-run pipeline.**
-4. **✅ Event-risk module + news/volatility kill-switch + tests.** ← you are here
-5. Telegram bot: alerts, approve/reject, `/settings` menu, status, pause/resume, auth allowlist.
+4. **✅ Event-risk module + news/volatility kill-switch + tests.**
+5. **✅ Telegram bot: alerts, approve/reject, `/settings` menu, status, pause/resume, auth allowlist.** ← you are here
 6. Latency/heartbeat auto-suspend; backtesting + out-of-sample validation net of fees.
 7. Live sandbox end-to-end with manual approval.
 8. Deployment artifacts (Dockerfile, compose, systemd) + full README.
