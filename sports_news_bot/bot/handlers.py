@@ -158,23 +158,32 @@ async def _confirm_and_post(
     flag: str,
     league: str,
 ) -> None:
-    """Save team, send test post, then offer to add more or finish."""
+    """Save team, show action buttons immediately, then fetch and send test news."""
     await add_user_team(user_id, team_name)
     context.user_data.pop("ts", None)
     context.user_data.pop("pending_team", None)
 
     all_teams = await get_user_teams(user_id)
 
+    # Show confirmation + action buttons RIGHT AWAY — never leave UI waiting
     await query.edit_message_text(
         f"✅ <b>{team_name}</b> added!\n"
         f"{flag} {country}  🏆 {league}\n\n"
         f"Teams saved: {len(all_teams)}/{MAX_TEAMS}\n\n"
-        "⏳ Fetching your first news post…",
+        "What would you like to do next?",
         parse_mode="HTML",
+        reply_markup=_add_more_keyboard(len(all_teams)),
     )
 
+    # Send a separate status message for the news fetch
     row = await get_user(user_id)
     target_lang = (row["language"] if row else None) or "en"
+
+    status_msg = await context.bot.send_message(
+        chat_id=user_id,
+        text="⏳ Fetching your first news post…",
+    )
+
     try:
         sent = await _process_group(
             team_name=team_name,
@@ -183,28 +192,19 @@ async def _confirm_and_post(
             bot=context.bot,
         )
         if sent == 0:
-            await context.bot.send_message(
-                chat_id=user_id,
-                text=(
-                    "📭 No news found yet.\n"
-                    "I'll check automatically every 15 minutes.\n"
-                    "Use /latest to check again anytime."
-                ),
+            await status_msg.edit_text(
+                "📭 No news found yet.\n"
+                "I'll check automatically every 15 minutes.\n"
+                "Use /latest to check again anytime."
             )
+        else:
+            await status_msg.delete()
     except Exception as exc:
         logger.error("Test post failed for user %d: %s", user_id, exc)
-
-    # Re-fetch so count is accurate after the save
-    all_teams = await get_user_teams(user_id)
-    await context.bot.send_message(
-        chat_id=user_id,
-        text=(
-            f"<b>What's next?</b>\n\n"
-            + _teams_text(all_teams)
-        ),
-        parse_mode="HTML",
-        reply_markup=_add_more_keyboard(len(all_teams)),
-    )
+        await status_msg.edit_text(
+            "⚠️ Couldn't fetch news right now — will retry automatically in 15 min.\n"
+            "Use /latest to retry anytime."
+        )
 
 
 # ══════════════════════════════════════════════════════════════════
