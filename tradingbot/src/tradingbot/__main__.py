@@ -162,6 +162,90 @@ async def _paper_run(settings: Settings) -> int:
     return rc
 
 
+def _fetch_data(settings: Settings, args) -> int:
+    import time
+
+    from .backtest.data import save_csv
+    from .exchange.factory import build_adapter
+
+    cfg = settings.config
+    symbol = args.symbol or cfg.exchange.symbols_allowlist[0]
+
+    async def _go() -> int:
+        adapter = build_adapter(cfg.exchange, settings.secrets)
+        try:
+            await adapter.load_markets()
+            client = adapter._client  # for parse_timeframe / pagination
+            step_ms = int(client.parse_timeframe(args.timeframe) * 1000)
+            since = int((time.time() - args.months * 30 * 86400) * 1000)
+            now_ms = int(time.time() * 1000)
+            all_candles = []
+            while since < now_ms:
+                batch = await adapter.fetch_ohlcv(symbol, args.timeframe, limit=1000, since=since)
+                if not batch:
+                    break
+                all_candles += batch
+                since = batch[-1].timestamp + step_ms
+                if len(batch) < 1000:
+                    break
+            save_csv(args.out, all_candles)
+            logger.info("Saved %d candles to %s", len(all_candles), args.out)
+            return 0
+        finally:
+            await adapter.close()
+
+    return asyncio.run(_go())
+
+
+def _walkforward(settings: Settings, args) -> int:
+    from .backtest.data import load_csv
+    from .backtest.engine import BacktestConfig
+    from .backtest.learners import ParamOptimizer, QLearner
+    from .backtest.metrics import METRICS
+    from .backtest.synthetic import synthetic_candles
+    from .backtest.walkforward import walk_forward
+
+    cfg = settings.config
+    if args.source == "csv":
+        if not args.csv:
+            logger.error("--csv PATH is required with --source csv")
+            return 2
+        candles = load_csv(args.csv)
+        data_note = f"CSV {args.csv} ({len(candles)} bars)"
+    else:
+        candles = synthetic_candles(n=args.bars, seed=args.seed)
+        data_note = f"SYNTHETIC (seed={args.seed}, {len(candles)} bars) — NOT market data"
+
+    bt_cfg = BacktestConfig(initial_equity=args.equity, fee_pct=args.fee, slippage_pct=args.slippage)
+    metric = METRICS[args.metric]
+    base = cfg.strategy
+    learners = [
+        ParamOptimizer(bt_cfg, metric, n_samples=args.samples, seed=args.seed),
+        QLearner(bt_cfg, metric, seed=args.seed),
+    ]
+
+    header = (
+        f"# Walk-forward report — {data_note}\n"
+        f"- windows: {args.windows} | metric: {args.metric} "
+        f"(net-of-fees return / max drawdown)\n"
+        f"- fees: {bt_cfg.fee_pct}%/side, slippage: {bt_cfg.slippage_pct}%/fill\n\n"
+        "`learned(OOS)` = params learned on the PREVIOUS window, scored on this "
+        "unseen window. A learner that only wins in-sample but not OOS is overfitting.\n\n"
+    )
+    blocks = []
+    for learner in learners:
+        rep = walk_forward(candles, base, learner, bt_cfg, metric, n_windows=args.windows)
+        blocks.append("```\n" + rep.render() + "\n```")
+    report = header + "\n\n".join(blocks) + "\n"
+    print(report)
+    if args.report:
+        from pathlib import Path
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report)
+        logger.info("wrote walk-forward report to %s", args.report)
+    return 0
+
+
 def _build_runner(settings: Settings):
     """Wire the full live runner. Heavy imports (ccxt/telegram) are local."""
     import signal
@@ -352,7 +436,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(prog="tradingbot")
     parser.add_argument(
         "command",
-        choices=["check-config", "healthcheck", "paper-run", "backtest", "run", "weekly-report"],
+        choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
+                 "weekly-report", "fetch-data", "walkforward"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -365,6 +450,16 @@ def main() -> int:
     parser.add_argument("--slippage", type=float, default=0.05, help="slippage %% per fill")
     parser.add_argument("--oos", type=float, default=0.30, help="out-of-sample fraction")
     parser.add_argument("--report", default=None, help="write the report to this path")
+    # fetch-data options
+    parser.add_argument("--symbol", default=None, help="symbol for fetch-data")
+    parser.add_argument("--timeframe", default="1h", help="OHLCV timeframe for fetch-data")
+    parser.add_argument("--months", type=int, default=12, help="months of history to fetch")
+    parser.add_argument("--out", default="data/ohlcv.csv", help="output CSV path")
+    # walkforward options
+    parser.add_argument("--csv", default=None, help="CSV path for --source csv")
+    parser.add_argument("--windows", type=int, default=4, help="walk-forward windows (e.g. quarters)")
+    parser.add_argument("--samples", type=int, default=40, help="optimizer samples per window")
+    parser.add_argument("--metric", default="net_return_over_maxdd", help="scoring metric")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)
@@ -386,6 +481,10 @@ def main() -> int:
         return asyncio.run(_run(settings))
     if args.command == "weekly-report":
         return _weekly_report(settings)
+    if args.command == "fetch-data":
+        return _fetch_data(settings, args)
+    if args.command == "walkforward":
+        return _walkforward(settings, args)
     return 2  # pragma: no cover
 
 

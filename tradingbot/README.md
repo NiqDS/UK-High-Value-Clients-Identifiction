@@ -227,6 +227,36 @@ and out-of-sample segments.
 > wiring only — the sample report shows it is net-negative after fees, as
 > expected. Model volatility regimes before trusting any news/regime overlay.
 
+## Walk-forward learning (refine + validate honestly)
+
+```bash
+# 1. pull ~12 months of real OHLCV once (needs exchange network):
+python -m tradingbot fetch-data --symbol BTC/USD --timeframe 1h --months 12 --out data/btc.csv
+
+# 2. walk it forward over 4 quarters, learning each quarter, scoring the NEXT unseen one:
+python -m tradingbot walkforward --source csv --csv data/btc.csv --windows 4 \
+    --metric net_return_over_maxdd --report reports/walkforward.md
+```
+
+The harness splits the history into N chronological windows and, for each:
+scores the **baseline** params, scores the params **learned on the previous
+window** on this *unseen* window (the honest out-of-sample test), then learns on
+this window and carries it forward. Two learners run side by side:
+
+- **`param_optimizer`** — searches the interpretable refinement params
+  (cooldown, crossover strength, sizing, ATR/TP/SL, VWAP floor) to maximise the
+  metric. Transparent, hard to overfit.
+- **`qlearning`** — a tabular contextual bandit over market regime
+  (valuation × volatility) → sizing action (skip / half / full / double),
+  reward = net-of-fees trade outcome.
+
+The metric is **net-of-fees return ÷ max drawdown** (risk-adjusted). Because
+every window is scored on data the learner never saw, **overfitting shows up as
+a gap between the in-sample and `learned(OOS)` columns** — see
+[`docs/walkforward_sample.md`](docs/walkforward_sample.md) (synthetic). On a
+random walk the optimizer overfits in-sample and the Q-learner correctly learns
+to *not trade* — both honest outcomes. Run it on the real CSV to tune for real.
+
 ## Running live (paper + sandbox first)
 
 ```bash

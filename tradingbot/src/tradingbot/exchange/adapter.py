@@ -78,9 +78,9 @@ class ExchangeAdapter:
         return _parse_order_book(symbol, raw)
 
     async def fetch_ohlcv(
-        self, symbol: str, timeframe: str = "1m", limit: int = 100
+        self, symbol: str, timeframe: str = "1m", limit: int = 100, since: int | None = None
     ) -> list[Candle]:
-        raw = await self._client.fetch_ohlcv(symbol, timeframe, None, limit)
+        raw = await self._client.fetch_ohlcv(symbol, timeframe, since, limit)
         return [_parse_candle(row) for row in raw]
 
     async def fetch_trading_fees(self) -> dict[str, Any]:
