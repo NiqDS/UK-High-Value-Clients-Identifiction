@@ -268,6 +268,16 @@ async def get_unsent_news(
             return await cur.fetchall()
 
 
+async def news_url_exists(source_url: str, target_lang: str) -> bool:
+    """True if this URL+language is already in the cache (skip translation)."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM news_cache WHERE source_url = ? AND target_lang = ? LIMIT 1",
+            (source_url, target_lang),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
 async def mark_news_sent(user_id: int, news_id: int) -> None:
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(

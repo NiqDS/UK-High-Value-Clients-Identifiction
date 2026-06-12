@@ -9,6 +9,7 @@ from bot.database import (
     get_all_active_user_teams,
     get_unsent_news,
     mark_news_sent,
+    news_url_exists,
     save_news_item,
 )
 from bot.news_fetcher import fetch_team_news
@@ -57,8 +58,12 @@ async def _process_group(
 
     news_items = await fetch_team_news(team_name)
 
-    for item in news_items:
-        orig_lang = item["original_lang"]
+    # Only translate items not already cached — avoids redundant API calls
+    for item in news_items[:15]:
+        if await news_url_exists(item["url"], target_lang):
+            continue                       # already translated and stored
+
+        orig_lang    = item["original_lang"]
         orig_title   = item["title"]
         orig_content = item["content"]
 
@@ -68,10 +73,9 @@ async def _process_group(
             trans_title = await translate_text(orig_title, orig_lang, target_lang)
             trans_content = (
                 await translate_text(orig_content, orig_lang, target_lang)
-                if orig_content
-                else ""
+                if orig_content else ""
             )
-            await asyncio.sleep(0.3)   # gentle rate-limit on translator
+            await asyncio.sleep(0.2)    # gentle rate-limit on translator
 
         await save_news_item(
             team_name=team_name,

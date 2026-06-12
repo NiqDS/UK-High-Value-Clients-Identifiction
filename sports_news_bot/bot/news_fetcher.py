@@ -13,8 +13,7 @@ from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
-# Maps ISO 639-1 language codes → Google News RSS params (hl, gl, ceid_lang)
-_GOOGLE_NEWS_PARAMS: dict[str, tuple[str, str, str]] = {
+_GOOGLE_NEWS_PARAMS: Dict[str, tuple] = {
     "en": ("en-US", "US", "en"),
     "ru": ("ru",    "RU", "ru"),
     "de": ("de",    "DE", "de"),
@@ -35,21 +34,19 @@ _GOOGLE_NEWS_PARAMS: dict[str, tuple[str, str, str]] = {
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0 Safari/537.36"
+        "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
     )
 }
 
+_FETCH_TIMEOUT   = 25   # seconds per RSS request
+_FETCH_RETRIES   = 3
+_RETRY_BACKOFF   = (2, 5, 10)  # seconds between retries
+
 
 def _google_news_url(query: str, lang_code: str) -> str:
-    hl, gl, ceid_lang = _GOOGLE_NEWS_PARAMS.get(
-        lang_code, _GOOGLE_NEWS_PARAMS["en"]
-    )
+    hl, gl, ceid_lang = _GOOGLE_NEWS_PARAMS.get(lang_code, _GOOGLE_NEWS_PARAMS["en"])
     q = quote_plus(f"{query} sport")
-    return (
-        f"https://news.google.com/rss/search"
-        f"?q={q}&hl={hl}&gl={gl}&ceid={gl}:{ceid_lang}"
-    )
+    return f"https://news.google.com/rss/search?q={q}&hl={hl}&gl={gl}&ceid={gl}:{ceid_lang}"
 
 
 def _strip_html(text: str, max_len: int = 400) -> str:
@@ -68,22 +65,32 @@ def _parse_date(entry: Any) -> datetime:
     return datetime.utcnow()
 
 
-async def _fetch_feed(
-    url: str,
-    session: aiohttp.ClientSession,
-) -> List[Any]:
-    try:
-        async with session.get(
-            url,
-            headers=_HEADERS,
-            timeout=aiohttp.ClientTimeout(total=15),
-        ) as resp:
-            if resp.status == 200:
-                return feedparser.parse(await resp.text()).entries
-    except asyncio.TimeoutError:
-        logger.warning("Timeout fetching %s", url)
-    except Exception as exc:
-        logger.warning("Error fetching %s: %s", url, exc)
+async def _fetch_feed(url: str, session: aiohttp.ClientSession) -> List[Any]:
+    """Fetch a single RSS feed with up to 3 retries and exponential backoff."""
+    for attempt in range(_FETCH_RETRIES):
+        try:
+            async with session.get(
+                url, headers=_HEADERS,
+                timeout=aiohttp.ClientTimeout(total=_FETCH_TIMEOUT),
+            ) as resp:
+                if resp.status == 200:
+                    return feedparser.parse(await resp.text()).entries
+                logger.debug("Feed %s returned HTTP %s", url, resp.status)
+                return []
+        except (asyncio.TimeoutError, aiohttp.ServerTimeoutError):
+            wait = _RETRY_BACKOFF[attempt]
+            if attempt < _FETCH_RETRIES - 1:
+                logger.warning("Timeout on %s (attempt %d/%d) — retrying in %ds",
+                               url, attempt + 1, _FETCH_RETRIES, wait)
+                await asyncio.sleep(wait)
+            else:
+                logger.error("Feed %s timed out after %d attempts", url, _FETCH_RETRIES)
+        except aiohttp.ClientError as exc:
+            logger.warning("Network error on %s: %s", url, exc)
+            break
+        except Exception as exc:
+            logger.warning("Unexpected error fetching %s: %s", url, exc)
+            break
     return []
 
 
@@ -93,13 +100,13 @@ async def fetch_team_news(
 ) -> List[Dict]:
     """Fetch news about *team_name* from Google News RSS in multiple languages.
 
-    Returns a deduplicated list of dicts sorted by published_at descending.
+    Returns a deduplicated list sorted by published_at descending (max 25 items).
     """
     if search_languages is None:
         search_languages = settings.NEWS_SEARCH_LANGUAGES
 
-    seen_urls: set[str] = set()
-    all_news: list[dict] = []
+    seen_urls: set = set()
+    all_news: List[Dict] = []
 
     async with aiohttp.ClientSession() as session:
         tasks = {
@@ -110,7 +117,7 @@ async def fetch_team_news(
 
         for lang, result in zip(tasks.keys(), results):
             if isinstance(result, Exception):
-                logger.warning("Failed to fetch %s feed: %s", lang, result)
+                logger.warning("Feed gather error (%s): %s", lang, result)
                 continue
 
             for entry in result[:12]:
@@ -121,13 +128,10 @@ async def fetch_team_news(
 
                 title = _strip_html(getattr(entry, "title", ""), 200)
                 content = _strip_html(
-                    getattr(entry, "summary", "") or getattr(entry, "description", ""),
-                    400,
+                    getattr(entry, "summary", "") or getattr(entry, "description", ""), 400
                 )
                 src = getattr(entry, "source", {})
-                source_name = (
-                    src.get("title", "News") if isinstance(src, dict) else "News"
-                )
+                source_name = src.get("title", "News") if isinstance(src, dict) else "News"
 
                 if len(title) < 5:
                     continue
@@ -142,4 +146,4 @@ async def fetch_team_news(
                 })
 
     all_news.sort(key=lambda x: x["published_at"], reverse=True)
-    return all_news[:30]
+    return all_news[:25]
