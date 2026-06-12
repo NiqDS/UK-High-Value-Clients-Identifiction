@@ -1,9 +1,12 @@
 """CLI entry point.
 
-Step 1 commands:
+Commands:
   - ``check-config``: load + validate config and secrets, print a redacted summary.
   - ``healthcheck``:  connect to the (sandbox) exchange and run read-only calls
                       (balance, ticker, order book) for the allowlisted symbols.
+  - ``paper-run``:    one pass of the full pipeline (strategy → risk → approval →
+                      paper execution) per allowlisted symbol. Always paper; no
+                      live orders are ever placed by this command.
 
 Run as: ``python -m tradingbot <command>``
 """
@@ -83,9 +86,57 @@ async def _healthcheck(settings: Settings) -> int:
     return rc
 
 
+async def _paper_run(settings: Settings) -> int:
+    """One full pipeline pass per symbol, in paper mode (no live orders)."""
+    from .exchange.factory import build_adapter
+    from .execution.broker import PaperBroker
+    from .execution.executor import Executor
+    from .execution.pipeline import TradingPipeline, auto_approve
+    from .risk.engine import AccountSnapshot, RiskEngine
+    from .risk.state import InMemoryRiskStateStore
+    from .strategy import MarketData, build_strategy
+
+    cfg = settings.config
+    store = InMemoryRiskStateStore(daily_reset_utc_hour=cfg.risk.daily_reset_utc_hour)
+    engine = RiskEngine(cfg, store)
+    executor = Executor(cfg, PaperBroker(cfg.fees))  # paper only — never live here
+    pipeline = TradingPipeline(cfg, engine, executor, store, approver=auto_approve)
+    strategy = build_strategy(cfg.strategy)
+    adapter = build_adapter(cfg.exchange, settings.secrets)
+
+    quote = cfg.exchange.quote_currency
+    rc = 0
+    try:
+        await adapter.load_markets()
+        # account snapshot (synthetic if no credentials, so the demo still runs)
+        equity = free = cfg.risk.floor_quote * 3
+        if settings.secrets.has_exchange_credentials:
+            try:
+                bal = await adapter.fetch_balance()
+                equity, free = bal.total(quote), bal.free(quote)
+            except Exception:
+                logger.exception("fetch_balance failed; using synthetic equity for demo")
+
+        for symbol in cfg.exchange.symbols_allowlist:
+            candles = await adapter.fetch_ohlcv(symbol, cfg.strategy.timeframe, cfg.strategy.ohlcv_limit)
+            ticker = await adapter.fetch_ticker(symbol)
+            market = MarketData(symbol=symbol, candles=candles, ticker=ticker)
+            intents = strategy.generate_signals(market)
+            logger.info("%s: strategy produced %d intent(s)", symbol, len(intents))
+            snap = AccountSnapshot(equity_quote=equity, free_quote=free, ticker=ticker)
+            for result in await pipeline.process_signals(intents, snap):
+                logger.info("  -> %s (%s)", result.outcome.value, result.decision.gate.value)
+    except Exception:
+        logger.exception("paper-run failed")
+        rc = 1
+    finally:
+        await adapter.close()
+    return rc
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="tradingbot")
-    parser.add_argument("command", choices=["check-config", "healthcheck"])
+    parser.add_argument("command", choices=["check-config", "healthcheck", "paper-run"])
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
     args = parser.parse_args()
@@ -99,6 +150,9 @@ def main() -> int:
     if args.command == "healthcheck":
         _print_config_summary(settings)
         return asyncio.run(_healthcheck(settings))
+    if args.command == "paper-run":
+        _print_config_summary(settings)
+        return asyncio.run(_paper_run(settings))
     return 2  # pragma: no cover
 
 

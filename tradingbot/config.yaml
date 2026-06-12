@@ -43,6 +43,17 @@ fees:
   max_spread_pct: 0.30              # skip entries when bid/ask spread is wider than this
   max_slippage_pct: 0.20            # skip when expected slippage exceeds this
 
+# --- Reference strategy (SMA crossover). Pluggable; swap via strategy.name later.
+strategy:
+  name: sma_crossover
+  timeframe: 1m
+  ohlcv_limit: 200
+  fast_period: 10
+  slow_period: 30                   # fast must be < slow
+  take_profit_pct: 1.5              # target move; MUST exceed round-trip fees + margin
+  stop_loss_pct: 1.0                # stop distance (drives the per-trade risk cap)
+  target_notional_quote: 40.0       # proposed size per signal (risk engine still caps it)
+
 # --- Scheduled macro events (FOMC, CPI, PPI, NFP...). Manage exposure, not direction.
 events:
   enabled: true

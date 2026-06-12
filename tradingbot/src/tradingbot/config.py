@@ -130,6 +130,23 @@ class RegimeConfig(BaseModel):
         return self
 
 
+class StrategyConfig(BaseModel):
+    name: str = "sma_crossover"
+    timeframe: str = "1m"
+    ohlcv_limit: int = Field(default=200, gt=0)
+    fast_period: int = Field(default=10, gt=0)
+    slow_period: int = Field(default=30, gt=0)
+    take_profit_pct: float = _pct(1.5)
+    stop_loss_pct: float = _pct(1.0)
+    target_notional_quote: float = Field(default=40.0, gt=0.0)
+
+    @model_validator(mode="after")
+    def _check_periods(self) -> "StrategyConfig":
+        if self.fast_period >= self.slow_period:
+            raise ValueError("strategy.fast_period must be < slow_period")
+        return self
+
+
 class TelegramConfig(BaseModel):
     enabled: bool = True
     approval_threshold_quote: float = Field(default=0.0, ge=0.0)
@@ -154,6 +171,7 @@ class Config(BaseModel):
     exchange: ExchangeConfig = Field(default_factory=ExchangeConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     fees: FeeConfig = Field(default_factory=FeeConfig)
+    strategy: StrategyConfig = Field(default_factory=StrategyConfig)
     events: EventConfig = Field(default_factory=EventConfig)
     kill_switch: KillSwitchConfig = Field(default_factory=KillSwitchConfig)
     regime: RegimeConfig = Field(default_factory=RegimeConfig)

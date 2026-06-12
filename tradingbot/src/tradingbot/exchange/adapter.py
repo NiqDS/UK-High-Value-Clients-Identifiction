@@ -34,6 +34,19 @@ class CcxtClient(Protocol):
         limit: int | None = ..., params: dict[str, Any] = ...,
     ) -> list[list[float]]: ...
     async def fetch_trading_fees(self, params: dict[str, Any] = ...) -> dict[str, Any]: ...
+    async def create_order(
+        self, symbol: str, type: str, side: str, amount: float,
+        price: float | None = ..., params: dict[str, Any] = ...,
+    ) -> dict[str, Any]: ...
+    async def cancel_order(
+        self, id: str, symbol: str | None = ..., params: dict[str, Any] = ...
+    ) -> dict[str, Any]: ...
+    async def fetch_order(
+        self, id: str, symbol: str | None = ..., params: dict[str, Any] = ...
+    ) -> dict[str, Any]: ...
+    async def fetch_open_orders(
+        self, symbol: str | None = ..., params: dict[str, Any] = ...
+    ) -> list[dict[str, Any]]: ...
     async def close(self) -> None: ...
 
 
@@ -80,6 +93,27 @@ class ExchangeAdapter:
         except Exception as exc:  # NotSupported and friends
             logger.warning("Exchange does not expose trading fees (%s); using config defaults", exc)
             return {}
+
+    # ----- order management (used by the live broker, behind the risk engine) ---
+    async def create_order(
+        self, symbol: str, order_type: str, side: str, amount: float,
+        price: float | None = None, client_order_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Place an order. client_order_id makes submission idempotent across
+        reconnects so a retry never double-places."""
+        params: dict[str, Any] = {}
+        if client_order_id is not None:
+            params["clientOrderId"] = client_order_id
+        return await self._client.create_order(symbol, order_type, side, amount, price, params)
+
+    async def cancel_order(self, order_id: str, symbol: str | None = None) -> dict[str, Any]:
+        return await self._client.cancel_order(order_id, symbol)
+
+    async def fetch_order(self, order_id: str, symbol: str | None = None) -> dict[str, Any]:
+        return await self._client.fetch_order(order_id, symbol)
+
+    async def fetch_open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
+        return await self._client.fetch_open_orders(symbol)
 
     async def close(self) -> None:
         try:

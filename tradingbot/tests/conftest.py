@@ -16,6 +16,7 @@ class FakeCcxtClient:
         self.closed = False
         self.markets_loaded = False
         self.support_trading_fees = True
+        self.created_orders: list = []
 
     def set_sandbox_mode(self, enabled: bool) -> None:
         self.sandbox_enabled = enabled
@@ -62,6 +63,32 @@ class FakeCcxtClient:
         if not self.support_trading_fees:
             raise NotImplementedError("fetch_trading_fees not supported")
         return {"BTC/USD": {"maker": 0.004, "taker": 0.006}}
+
+    async def create_order(
+        self, symbol: str, type: str, side: str, amount: float,
+        price: float | None = None, params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        self.created_orders.append((symbol, type, side, amount, price, params or {}))
+        return {
+            "id": "EX-1",
+            "clientOrderId": (params or {}).get("clientOrderId"),
+            "status": "closed",
+            "filled": amount,
+            "average": price if price is not None else 100.0,
+            "fee": {"cost": (price or 100.0) * amount * 0.004, "currency": "USD"},
+        }
+
+    async def cancel_order(self, id: str, symbol: str | None = None,
+                           params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"id": id, "status": "canceled"}
+
+    async def fetch_order(self, id: str, symbol: str | None = None,
+                          params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"id": id, "status": "closed"}
+
+    async def fetch_open_orders(self, symbol: str | None = None,
+                                params: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+        return []
 
     async def close(self) -> None:
         self.closed = True

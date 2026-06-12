@@ -12,12 +12,13 @@ setting defaults to its most conservative value.
 
 ---
 
-## ⚠️ Build status — Step 2 of 8
+## ⚠️ Build status — Step 3 of 8
 
-Delivered so far: the **scaffold, config system, read-only exchange adapter**
-(Step 1) and the **hard risk engine** (Step 2). Execution, event/kill-switch
-modules, Telegram approval, latency monitor, and backtesting are **not built
-yet** — see [Build order](#build-order). Do not run this against real funds.
+Delivered so far: the **scaffold, config, read-only adapter** (Step 1), the
+**hard risk engine** (Step 2), and the **execution layer + reference strategy +
+full dry-run pipeline** (Step 3). Event/kill-switch modules, Telegram approval,
+latency monitor, and backtesting are **not built yet** — see
+[Build order](#build-order). Do not run this against real funds.
 
 What works today:
 
@@ -33,10 +34,21 @@ What works today:
   taker fees when fallback is allowed), and the **account floor** (projected
   post-trade free balance — a breach flips a persistent halt flag). Rolling
   daily counters with a configurable UTC reset boundary.
+- A reference **SMA-crossover strategy** that emits `OrderIntent`s (BUY entries
+  with take-profit + stop; SELL exits) — pluggable via `strategy.name`.
+- The **execution layer**: maker-first passive pricing (orders rest as makers),
+  taker only when `allow_taker_fallback` is on, a pre-placement **slippage
+  guard**, and fee-aware fills. A **paper broker** (idempotent by client order
+  id) simulates fills with no exchange contact; a **live broker** places real
+  orders behind the same interface.
+- The **pipeline** wiring strategy → risk → (approval) → execution → trade
+  count, with a pluggable approver (auto-approve in dry-run; Telegram later).
 - Structured logging with **secret redaction**.
-- `check-config` and `healthcheck` CLI commands.
-- A network-free unit-test suite (**52 tests**: config, adapter, risk state,
-  one per risk gate, floor-halt, and approval routing).
+- `check-config`, `healthcheck`, and `paper-run` CLI commands (`paper-run`
+  never places live orders).
+- A network-free unit-test suite (**72 tests**: config, adapter, risk state,
+  one per risk gate, floor-halt, approval routing, strategy signals, execution
+  pricing/slippage/idempotency, and the full pipeline).
 
 ---
 
@@ -122,8 +134,8 @@ Modules (those marked ✅ exist as of Step 1):
 - `logging_setup.py` ✅ — structured logging + secret redaction.
 - `domain.py` ✅ — shared types (`OrderIntent`, `Side`, `OrderType`).
 - `risk/` ✅ — the risk engine + persistent state (floor halt, daily counters).
-- `strategy/` — pluggable `generate_signals() -> list[OrderIntent]` (reference SMA crossover).
-- `execution/` — fee-aware, maker-first placement with slippage/spread guards.
+- `strategy/` ✅ — pluggable `generate_signals() -> list[OrderIntent]` (reference SMA crossover).
+- `execution/` ✅ — fee-aware, maker-first placement; slippage guard; paper + live brokers; pipeline.
 - `events/` — economic-calendar event-risk + news/volatility kill-switch.
 - `regime/` — optional slow uncertainty/sentiment overlay.
 - `approval/` — Telegram approve/reject workflow.
@@ -135,8 +147,8 @@ Modules (those marked ✅ exist as of Step 1):
 ## Build order
 
 1. **✅ Scaffold, config, read-only exchange adapter (sandbox).**
-2. **✅ Risk engine + tests (floor, limits, daily counters, fee gate, min-notional/spread).** ← you are here
-3. Execution layer with paper mode (maker-first, slippage guard); full dry-run pipeline.
+2. **✅ Risk engine + tests (floor, limits, daily counters, fee gate, min-notional/spread).**
+3. **✅ Execution layer with paper mode (maker-first, slippage guard); full dry-run pipeline.** ← you are here
 4. Event-risk module + news/volatility kill-switch + tests.
 5. Telegram bot: alerts, approve/reject, `/settings` menu, status, pause/resume, auth allowlist.
 6. Latency/heartbeat auto-suspend; backtesting + out-of-sample validation net of fees.
