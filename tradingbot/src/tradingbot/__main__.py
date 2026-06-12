@@ -88,6 +88,12 @@ async def _healthcheck(settings: Settings) -> int:
 
 async def _paper_run(settings: Settings) -> int:
     """One full pipeline pass per symbol, in paper mode (no live orders)."""
+    from datetime import datetime, timezone
+
+    from .events.calendar import EventCalendar
+    from .events.event_risk import EventRiskModule
+    from .events.kill_switch import KillSwitch, Observation
+    from .events.posture import PostureProvider
     from .exchange.factory import build_adapter
     from .execution.broker import PaperBroker
     from .execution.executor import Executor
@@ -100,7 +106,12 @@ async def _paper_run(settings: Settings) -> int:
     store = InMemoryRiskStateStore(daily_reset_utc_hour=cfg.risk.daily_reset_utc_hour)
     engine = RiskEngine(cfg, store)
     executor = Executor(cfg, PaperBroker(cfg.fees))  # paper only — never live here
-    pipeline = TradingPipeline(cfg, engine, executor, store, approver=auto_approve)
+    event_module = EventRiskModule(cfg.events, EventCalendar.from_config(cfg.events))
+    kill_switch = KillSwitch(cfg.kill_switch)
+    posture = PostureProvider(event_module=event_module, kill_switch=kill_switch)
+    pipeline = TradingPipeline(
+        cfg, engine, executor, store, approver=auto_approve, posture_provider=posture
+    )
     strategy = build_strategy(cfg.strategy)
     adapter = build_adapter(cfg.exchange, settings.secrets)
 
@@ -117,15 +128,32 @@ async def _paper_run(settings: Settings) -> int:
             except Exception:
                 logger.exception("fetch_balance failed; using synthetic equity for demo")
 
+        now = datetime.now(timezone.utc)
+        for action, name in event_module.transitions(now):
+            logger.info("EVENT WINDOW %s: %s", action.upper(), name)
+
         for symbol in cfg.exchange.symbols_allowlist:
             candles = await adapter.fetch_ohlcv(symbol, cfg.strategy.timeframe, cfg.strategy.ohlcv_limit)
             ticker = await adapter.fetch_ticker(symbol)
+            # feed the volatility kill-switch from the candle stream
+            for c in candles:
+                kill_switch.observe(
+                    Observation(
+                        datetime.fromtimestamp(c.timestamp / 1000, tz=timezone.utc),
+                        price=c.close, volume=c.volume,
+                    )
+                )
+            ks = kill_switch.status(now)
+            if ks.paused:
+                logger.warning("%s: kill-switch PAUSED (%s)", symbol, ks.reason or "manual")
+
             market = MarketData(symbol=symbol, candles=candles, ticker=ticker)
             intents = strategy.generate_signals(market)
             logger.info("%s: strategy produced %d intent(s)", symbol, len(intents))
-            snap = AccountSnapshot(equity_quote=equity, free_quote=free, ticker=ticker)
+            snap = AccountSnapshot(equity_quote=equity, free_quote=free, ticker=ticker, now=now)
             for result in await pipeline.process_signals(intents, snap):
-                logger.info("  -> %s (%s)", result.outcome.value, result.decision.gate.value)
+                gate = result.decision.gate.value if result.decision else "-"
+                logger.info("  -> %s (%s)", result.outcome.value, gate)
     except Exception:
         logger.exception("paper-run failed")
         rc = 1

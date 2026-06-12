@@ -29,15 +29,21 @@ class Executor:
         self.config = config
         self.broker = broker
 
-    def _maker_price(self, side: Side, best_bid: float, best_ask: float) -> float:
-        """Passive limit price that rests as a maker (offset away from mid)."""
-        offset = self.config.fees.maker_offset_pct / 100.0
+    def _maker_price(
+        self, side: Side, best_bid: float, best_ask: float, extra_offset_pct: float = 0.0
+    ) -> float:
+        """Passive limit price that rests as a maker (offset away from mid).
+
+        ``extra_offset_pct`` widens the offset during event-risk windows.
+        """
+        offset = (self.config.fees.maker_offset_pct + extra_offset_pct) / 100.0
         if side == Side.BUY:
             return best_bid * (1 - offset)
         return best_ask * (1 + offset)
 
     def _build_order(
-        self, intent: OrderIntent, decision: RiskDecision, ticker: Ticker
+        self, intent: OrderIntent, decision: RiskDecision, ticker: Ticker,
+        extra_maker_offset_pct: float = 0.0,
     ) -> ExecutionResult | Order:
         fees = self.config.fees
         best_bid, best_ask = ticker.bid, ticker.ask
@@ -52,7 +58,7 @@ class Executor:
 
         if use_maker:
             role = LiquidityRole.MAKER
-            price = self._maker_price(intent.side, best_bid, best_ask)
+            price = self._maker_price(intent.side, best_bid, best_ask, extra_maker_offset_pct)
             order_type = OrderType.LIMIT
         else:
             # taker path — only allowed when configured
@@ -84,9 +90,10 @@ class Executor:
         return dev <= cap
 
     async def execute(
-        self, intent: OrderIntent, decision: RiskDecision, ticker: Ticker
+        self, intent: OrderIntent, decision: RiskDecision, ticker: Ticker,
+        extra_maker_offset_pct: float = 0.0,
     ) -> ExecutionResult:
-        built = self._build_order(intent, decision, ticker)
+        built = self._build_order(intent, decision, ticker, extra_maker_offset_pct)
         if isinstance(built, ExecutionResult):  # rejected during build
             logger.info("Execution rejected: %s", built.reason)
             return built

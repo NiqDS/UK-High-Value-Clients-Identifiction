@@ -12,13 +12,13 @@ setting defaults to its most conservative value.
 
 ---
 
-## ⚠️ Build status — Step 3 of 8
+## ⚠️ Build status — Step 4 of 8
 
-Delivered so far: the **scaffold, config, read-only adapter** (Step 1), the
-**hard risk engine** (Step 2), and the **execution layer + reference strategy +
-full dry-run pipeline** (Step 3). Event/kill-switch modules, Telegram approval,
-latency monitor, and backtesting are **not built yet** — see
-[Build order](#build-order). Do not run this against real funds.
+Delivered so far: **scaffold + read-only adapter** (Step 1), the **hard risk
+engine** (Step 2), the **execution layer + reference strategy + dry-run
+pipeline** (Step 3), and the **event-risk module + news/volatility kill-switch**
+(Step 4). Telegram approval, latency monitor, and backtesting are **not built
+yet** — see [Build order](#build-order). Do not run this against real funds.
 
 What works today:
 
@@ -41,14 +41,23 @@ What works today:
   guard**, and fee-aware fills. A **paper broker** (idempotent by client order
   id) simulates fills with no exchange contact; a **live broker** places real
   orders behind the same interface.
-- The **pipeline** wiring strategy → risk → (approval) → execution → trade
-  count, with a pluggable approver (auto-approve in dry-run; Telegram later).
+- The **pipeline** wiring strategy → posture → risk → (approval) → execution →
+  trade count, with a pluggable approver (auto-approve in dry-run; Telegram later).
+- The **event-risk module**: an economic calendar (FOMC/CPI/PPI/NFP…) that
+  applies a protective posture inside a configurable window — opening *before*
+  the release for pre-announcement drift — to pause entries, reduce size,
+  widen maker spreads, and report window open/close transitions.
+- The **news/volatility kill-switch**: a defensive, strategy-independent monitor
+  that halts new entries on an abnormal N-sigma price-velocity or volume spike
+  and resumes only after a cooldown of normalised volatility (or manual resume).
+  It never auto-trades the direction of a shock.
 - Structured logging with **secret redaction**.
 - `check-config`, `healthcheck`, and `paper-run` CLI commands (`paper-run`
   never places live orders).
-- A network-free unit-test suite (**72 tests**: config, adapter, risk state,
+- A network-free unit-test suite (**89 tests**: config, adapter, risk state,
   one per risk gate, floor-halt, approval routing, strategy signals, execution
-  pricing/slippage/idempotency, and the full pipeline).
+  pricing/slippage/idempotency, the full pipeline, event windows + transitions,
+  kill-switch trigger/cooldown/manual-resume, and posture integration).
 
 ---
 
@@ -136,7 +145,7 @@ Modules (those marked ✅ exist as of Step 1):
 - `risk/` ✅ — the risk engine + persistent state (floor halt, daily counters).
 - `strategy/` ✅ — pluggable `generate_signals() -> list[OrderIntent]` (reference SMA crossover).
 - `execution/` ✅ — fee-aware, maker-first placement; slippage guard; paper + live brokers; pipeline.
-- `events/` — economic-calendar event-risk + news/volatility kill-switch.
+- `events/` ✅ — economic-calendar event-risk + news/volatility kill-switch + combined posture.
 - `regime/` — optional slow uncertainty/sentiment overlay.
 - `approval/` — Telegram approve/reject workflow.
 - `store/` — SQLite (SQLAlchemy) models & queries.
@@ -148,8 +157,8 @@ Modules (those marked ✅ exist as of Step 1):
 
 1. **✅ Scaffold, config, read-only exchange adapter (sandbox).**
 2. **✅ Risk engine + tests (floor, limits, daily counters, fee gate, min-notional/spread).**
-3. **✅ Execution layer with paper mode (maker-first, slippage guard); full dry-run pipeline.** ← you are here
-4. Event-risk module + news/volatility kill-switch + tests.
+3. **✅ Execution layer with paper mode (maker-first, slippage guard); full dry-run pipeline.**
+4. **✅ Event-risk module + news/volatility kill-switch + tests.** ← you are here
 5. Telegram bot: alerts, approve/reject, `/settings` menu, status, pause/resume, auth allowlist.
 6. Latency/heartbeat auto-suspend; backtesting + out-of-sample validation net of fees.
 7. Live sandbox end-to-end with manual approval.
