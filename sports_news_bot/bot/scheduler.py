@@ -6,7 +6,7 @@ from telegram.ext import ContextTypes
 
 from bot.database import (
     delete_old_news,
-    get_active_users,
+    get_all_active_user_teams,
     get_unsent_news,
     mark_news_sent,
     save_news_item,
@@ -114,16 +114,16 @@ async def check_and_send_news(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Scheduled job: runs every NEWS_CHECK_INTERVAL seconds."""
     logger.info("=== Scheduled news check started ===")
     try:
-        users = await get_active_users()
-        if not users:
-            logger.info("No active users with a team configured — skipping")
+        rows = await get_all_active_user_teams()
+        if not rows:
+            logger.info("No active users with teams configured — skipping")
             return
 
-        # Group users by (team_name, language) to avoid duplicate fetches
-        groups: dict[tuple[str, str], list[int]] = {}
-        for u in users:
-            key = (u["team_name"].lower(), u["language"])
-            groups.setdefault(key, []).append(u["user_id"])
+        # Group (team_name, language) → [user_ids] to avoid duplicate fetches
+        groups = {}
+        for r in rows:
+            key = (r["team_name"].lower(), r["language"])
+            groups.setdefault(key, []).append(r["user_id"])
 
         for (team, lang), uids in groups.items():
             await _process_group(team, lang, uids, context.bot)

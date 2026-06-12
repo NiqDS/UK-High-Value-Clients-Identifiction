@@ -16,6 +16,7 @@ from bot.handlers import (
     start_command,
     status_command,
     stop_command,
+    teams_command,
 )
 from bot.scheduler import check_and_send_news, cleanup_old_news
 from bot.database import init_database
@@ -51,8 +52,9 @@ def _setup_logging() -> None:
 _BOT_COMMANDS = [
     BotCommand("start",   "Start the bot / show quick menu"),
     BotCommand("setlang", "Set your language (shows menu)"),
-    BotCommand("setteam", "Set team to follow, e.g. /setteam Arsenal"),
-    BotCommand("latest",  "Get latest news right now"),
+    BotCommand("setteam", "Pick a team step-by-step (up to 3)"),
+    BotCommand("teams",   "View and manage your tracked teams"),
+    BotCommand("latest",  "Get latest news for all your teams"),
     BotCommand("status",  "Show your current settings"),
     BotCommand("stop",    "Pause automatic notifications"),
     BotCommand("resume",  "Resume automatic notifications"),
@@ -112,6 +114,7 @@ def main() -> None:
     app.add_handler(CommandHandler("status",             status_command))
     app.add_handler(CommandHandler("stop",               stop_command))
     app.add_handler(CommandHandler(["resume", "on"],     resume_command))
+    app.add_handler(CommandHandler("teams",              teams_command))
     app.add_handler(CommandHandler(["latest", "news"],   latest_command))
     app.add_handler(CallbackQueryHandler(button_callback))
 
