@@ -79,6 +79,21 @@ async def init_database() -> None:
             FROM   users
             WHERE  team_name IS NOT NULL
         """)
+
+        # Idempotent column migrations
+        for stmt in [
+            "ALTER TABLE news_cache ADD COLUMN image_url  TEXT DEFAULT ''",
+            "ALTER TABLE news_cache ADD COLUMN title_hash TEXT",
+        ]:
+            try:
+                await db.execute(stmt)
+            except Exception:
+                pass  # column already exists
+
+        await db.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_news_title_hash "
+            "ON news_cache(title_hash, team_name, target_lang)"
+        )
         await db.commit()
 
     logger.info("Database initialised at %s", DB_PATH)
@@ -224,6 +239,8 @@ async def save_news_item(
     source_url: str,
     source_name: str,
     published_at: datetime,
+    image_url: str = "",
+    title_hash: str = "",
 ) -> Optional[int]:
     try:
         async with aiosqlite.connect(DB_PATH) as db:
@@ -231,12 +248,12 @@ async def save_news_item(
                 INSERT OR IGNORE INTO news_cache (
                     team_name, original_lang, original_title, original_content,
                     translated_title, translated_content, target_lang,
-                    source_url, source_name, published_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    source_url, source_name, published_at, image_url, title_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 team_name.lower(), original_lang, original_title, original_content,
                 translated_title, translated_content, target_lang,
-                source_url, source_name, published_at,
+                source_url, source_name, published_at, image_url, title_hash,
             ))
             await db.commit()
             return cur.lastrowid if cur.rowcount else None
@@ -274,6 +291,18 @@ async def news_url_exists(source_url: str, target_lang: str) -> bool:
         async with db.execute(
             "SELECT 1 FROM news_cache WHERE source_url = ? AND target_lang = ? LIMIT 1",
             (source_url, target_lang),
+        ) as cur:
+            return await cur.fetchone() is not None
+
+
+async def news_title_hash_exists(title_hash: str, team_name: str, target_lang: str) -> bool:
+    """True if an article with this normalised title is already cached for this team+lang."""
+    if not title_hash:
+        return False
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT 1 FROM news_cache WHERE title_hash = ? AND team_name = ? AND target_lang = ? LIMIT 1",
+            (title_hash, team_name.lower(), target_lang),
         ) as cur:
             return await cur.fetchone() is not None
 

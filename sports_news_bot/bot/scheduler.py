@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 from datetime import datetime
 
@@ -9,6 +10,7 @@ from bot.database import (
     get_all_active_user_teams,
     get_unsent_news,
     mark_news_sent,
+    news_title_hash_exists,
     news_url_exists,
     save_news_item,
 )
@@ -17,6 +19,11 @@ from bot.translator import translate_text
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _title_hash(team: str, title: str) -> str:
+    raw = f"{team.lower()}|{title.lower().strip()}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:24]
 
 
 def _format_post(news_row, team_name: str) -> str:
@@ -43,6 +50,53 @@ def _format_post(news_row, team_name: str) -> str:
     return "\n".join(lines)
 
 
+def _format_caption(news_row, team_name: str) -> str:
+    """Photo caption version — same structure but content trimmed to fit 1024 chars."""
+    title   = news_row["translated_title"]   or news_row["original_title"]
+    content = news_row["translated_content"] or ""
+    source  = news_row["source_name"]        or "News"
+    url     = news_row["source_url"]         or ""
+
+    lines = [f"⚽ <b>{team_name}</b>", "", f"📰 <b>{title}</b>"]
+    if content:
+        lines += ["", content[:300]]
+    lines += ["", f"📡 {source}"]
+    if url:
+        lines.append(f'🔗 <a href="{url}">Read more</a>')
+
+    raw_ts = news_row["published_at"]
+    if raw_ts:
+        try:
+            dt = datetime.fromisoformat(str(raw_ts))
+            lines.append(f"🕐 {dt.strftime('%d.%m.%Y %H:%M')} UTC")
+        except ValueError:
+            pass
+
+    return "\n".join(lines)[:1024]
+
+
+async def _send_news_item(bot, chat_id: int, row, team_name: str) -> None:
+    """Send one news item — photo+caption when an image URL is available."""
+    image_url = (row["image_url"] or "") if "image_url" in row.keys() else ""
+    if image_url:
+        try:
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=image_url,
+                caption=_format_caption(row, team_name),
+                parse_mode="HTML",
+            )
+            return
+        except Exception as exc:
+            logger.debug("Photo send failed (%s), falling back to text: %s", image_url, exc)
+    await bot.send_message(
+        chat_id=chat_id,
+        text=_format_post(row, team_name),
+        parse_mode="HTML",
+        disable_web_page_preview=False,
+    )
+
+
 async def _process_group(
     team_name: str,
     target_lang: str,
@@ -58,10 +112,15 @@ async def _process_group(
 
     news_items = await fetch_team_news(team_name)
 
-    # Only translate items not already cached — avoids redundant API calls
+    # Only translate items not already cached — avoids redundant API calls.
+    # Two checks: URL (exact match) and title hash (catches same story via different redirect URL).
     for item in news_items[:15]:
         if await news_url_exists(item["url"], target_lang):
-            continue                       # already translated and stored
+            continue
+
+        t_hash = _title_hash(team_name, item["title"])
+        if await news_title_hash_exists(t_hash, team_name, target_lang):
+            continue
 
         orig_lang    = item["original_lang"]
         orig_title   = item["title"]
@@ -88,6 +147,8 @@ async def _process_group(
             source_url=item["url"],
             source_name=item["source_name"],
             published_at=item["published_at"],
+            image_url=item.get("image_url", ""),
+            title_hash=t_hash,
         )
 
     total_sent = 0
@@ -100,12 +161,7 @@ async def _process_group(
         )
         for row in unsent:
             try:
-                await bot.send_message(
-                    chat_id=user_id,
-                    text=_format_post(row, team_name),
-                    parse_mode="HTML",
-                    disable_web_page_preview=False,
-                )
+                await _send_news_item(bot, user_id, row, team_name)
                 await mark_news_sent(user_id, row["id"])
                 await asyncio.sleep(0.5)
                 total_sent += 1

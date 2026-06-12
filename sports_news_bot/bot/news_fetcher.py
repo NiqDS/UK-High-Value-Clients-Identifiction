@@ -55,6 +55,26 @@ def _strip_html(text: str, max_len: int = 400) -> str:
     return BeautifulSoup(text, "lxml").get_text(separator=" ", strip=True)[:max_len]
 
 
+def _extract_image(entry: Any) -> str:
+    """Extract the first usable image URL from a feed entry."""
+    for attr in ("media_thumbnail", "media_content"):
+        items = getattr(entry, attr, None)
+        if items and isinstance(items, list):
+            url = items[0].get("url", "")
+            if url:
+                return url
+    for enc in getattr(entry, "enclosures", []):
+        if enc.get("type", "").startswith("image/"):
+            return enc.get("href", "") or enc.get("url", "")
+    # fall back to first <img> in summary HTML
+    summary = getattr(entry, "summary", "") or ""
+    if "<img" in summary:
+        img = BeautifulSoup(summary, "lxml").find("img")
+        if img and img.get("src"):
+            return img["src"]
+    return ""
+
+
 def _parse_date(entry: Any) -> datetime:
     try:
         raw = getattr(entry, "published", None) or getattr(entry, "updated", None)
@@ -143,6 +163,7 @@ async def fetch_team_news(
                     "source_name":   source_name,
                     "published_at":  _parse_date(entry),
                     "original_lang": lang,
+                    "image_url":     _extract_image(entry),
                 })
 
     all_news.sort(key=lambda x: x["published_at"], reverse=True)
