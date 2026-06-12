@@ -162,11 +162,76 @@ async def _paper_run(settings: Settings) -> int:
     return rc
 
 
+def _backtest(settings: Settings, args) -> int:
+    from .backtest.engine import Backtester, BacktestConfig
+    from .backtest.synthetic import synthetic_candles
+    from .strategy import build_strategy
+
+    cfg = settings.config
+    bt_cfg = BacktestConfig(
+        initial_equity=args.equity, fee_pct=args.fee,
+        slippage_pct=args.slippage, oos_ratio=args.oos,
+    )
+
+    if args.source == "exchange":
+        from .exchange.factory import build_adapter
+
+        async def _fetch():
+            adapter = build_adapter(cfg.exchange, settings.secrets)
+            try:
+                await adapter.load_markets()
+                symbol = cfg.exchange.symbols_allowlist[0]
+                return symbol, await adapter.fetch_ohlcv(symbol, cfg.strategy.timeframe, args.bars)
+            finally:
+                await adapter.close()
+
+        symbol, candles = asyncio.run(_fetch())
+        data_note = f"{symbol} {cfg.strategy.timeframe} from {cfg.exchange.name}"
+    else:
+        symbol = cfg.exchange.symbols_allowlist[0]
+        candles = synthetic_candles(n=args.bars, seed=args.seed)
+        data_note = f"SYNTHETIC random walk (seed={args.seed}) — NOT market data"
+
+    bt = Backtester(bt_cfg)
+    in_s, oos = bt.run_oos(candles, lambda: build_strategy(cfg.strategy), symbol)
+
+    report = (
+        f"# Backtest report — {cfg.strategy.name}\n\n"
+        f"- data: {data_note}\n"
+        f"- bars: {len(candles)} (in-sample {len(in_s.equity_curve)}, "
+        f"out-of-sample {len(oos.equity_curve)})\n"
+        f"- fees: {bt_cfg.fee_pct}%/side, slippage: {bt_cfg.slippage_pct}%/fill\n"
+        f"- strategy: SMA {cfg.strategy.fast_period}/{cfg.strategy.slow_period}, "
+        f"TP {cfg.strategy.take_profit_pct}% / SL {cfg.strategy.stop_loss_pct}%\n\n"
+        "```\n" + in_s.summary("IN-SAMPLE") + "\n\n" + oos.summary("OUT-OF-SAMPLE") + "\n```\n\n"
+        "> A strategy that only works in-sample, or is profitable gross but not "
+        "net of fees, should be treated as failed.\n"
+    )
+    print(report)
+    if args.report:
+        from pathlib import Path
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report)
+        logger.info("wrote report to %s", args.report)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="tradingbot")
-    parser.add_argument("command", choices=["check-config", "healthcheck", "paper-run"])
+    parser.add_argument(
+        "command", choices=["check-config", "healthcheck", "paper-run", "backtest"]
+    )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
+    # backtest options
+    parser.add_argument("--source", choices=["synthetic", "exchange"], default="synthetic")
+    parser.add_argument("--bars", type=int, default=1000)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--equity", type=float, default=10_000.0)
+    parser.add_argument("--fee", type=float, default=0.6, help="fee %% per side")
+    parser.add_argument("--slippage", type=float, default=0.05, help="slippage %% per fill")
+    parser.add_argument("--oos", type=float, default=0.30, help="out-of-sample fraction")
+    parser.add_argument("--report", default=None, help="write the report to this path")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)
@@ -181,6 +246,8 @@ def main() -> int:
     if args.command == "paper-run":
         _print_config_summary(settings)
         return asyncio.run(_paper_run(settings))
+    if args.command == "backtest":
+        return _backtest(settings, args)
     return 2  # pragma: no cover
 
 

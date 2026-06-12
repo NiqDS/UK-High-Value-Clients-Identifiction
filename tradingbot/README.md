@@ -12,14 +12,15 @@ setting defaults to its most conservative value.
 
 ---
 
-## ⚠️ Build status — Step 5 of 8
+## ⚠️ Build status — Step 6 of 8
 
 Delivered so far: **scaffold + read-only adapter** (Step 1), the **hard risk
 engine** (Step 2), the **execution layer + reference strategy + dry-run
 pipeline** (Step 3), the **event-risk module + news/volatility kill-switch**
-(Step 4), and the **Telegram approval bot + runtime controls** (Step 5). The
-latency/heartbeat monitor and backtesting are **not built yet** — see
-[Build order](#build-order). Do not run this against real funds.
+(Step 4), the **Telegram approval bot + runtime controls** (Step 5), and the
+**latency/heartbeat auto-suspend + honest backtester** (Step 6). What remains:
+the live sandbox end-to-end run (Step 7) and deployment artifacts (Step 8) —
+see [Build order](#build-order). Do not run this against real funds.
 
 What works today:
 
@@ -59,14 +60,27 @@ What works today:
   `/pause` + `/resume` (kill switch); a **chat-ID allowlist** (empty ⇒ nobody
   authorised); and JSON-persisted runtime overrides so changes — and a manual
   pause — survive a restart.
+- The **latency/heartbeat monitor**: tracks round-trip API latency and
+  connection health; after N consecutive degraded/failed pings it **auto-suspends
+  new entries** (and can cancel resting orders), alerts, and **never crash-loops**;
+  it auto-resumes after the connection is healthy for a configurable streak.
+  Suspension is kept separate from the manual/floor halt.
+- The **honest, zero-look-ahead backtester**: at bar *i* the strategy sees only
+  `candles[:i+1]` and fills at bar *i+1*'s open; intra-bar stop/take-profit
+  (stop-first, worst case); realistic fees + slippage on every fill;
+  **out-of-sample split**; a report that shows **gross vs net-of-fees** so a
+  strategy that's profitable gross but not net is exposed. See
+  [`docs/backtest_report_sample.md`](docs/backtest_report_sample.md).
 - Structured logging with **secret redaction**.
-- `check-config`, `healthcheck`, and `paper-run` CLI commands (`paper-run`
-  never places live orders).
-- A network-free unit-test suite (**108 tests**: config, adapter, risk state,
-  one per risk gate, floor-halt, approval routing, strategy signals, execution
+- `check-config`, `healthcheck`, `paper-run` (never live), and `backtest` CLI
+  commands.
+- A network-free unit-test suite (**121 tests**) covering config, adapter, every
+  risk gate + floor-halt, approval routing, strategy signals, execution
   pricing/slippage/idempotency, the full pipeline, event windows + transitions,
-  kill-switch trigger/cooldown/manual-resume, posture integration, and the
-  approval workflow — approve/reject/timeout, settings, persistence, status).
+  kill-switch trigger/cooldown/manual-resume, posture integration, the approval
+  workflow (approve/reject/timeout, settings, persistence, status), the health
+  monitor (suspend/resume/blip-reset + pipeline suspend), and the backtester
+  (no-look-ahead, next-open fills, fee impact, intra-bar stop, OOS split).
 
 ---
 
@@ -158,6 +172,26 @@ round-trip fees, net-of-fee target, and projected balance vs floor, with inline
 Runtime changes (and a manual pause) persist to `runtime_overrides.json` so a
 restart does not silently resume.
 
+## Backtesting & validation
+
+```bash
+# Honest, zero-look-ahead backtest with out-of-sample split, net of fees.
+python -m tradingbot backtest --source synthetic --bars 1500 --report docs/report.md
+python -m tradingbot backtest --source exchange --bars 1000   # real sandbox OHLCV
+```
+
+Flags: `--fee` (%/side), `--slippage` (%/fill), `--oos` (out-of-sample
+fraction), `--equity`, `--seed`. The engine never lets the strategy see future
+bars and fills at the next bar's open; stop/take-profit are evaluated intra-bar
+(stop-first). The report prints **gross vs NET-of-fees** for both the in-sample
+and out-of-sample segments.
+
+> Validation rules from the brief: test **out-of-sample**, not just in-sample;
+> include realistic fees and slippage; a strategy profitable gross but not net
+> of fees is **not** profitable. The bundled SMA strategy is a reference for
+> wiring only — the sample report shows it is net-negative after fees, as
+> expected. Model volatility regimes before trusting any news/regime overlay.
+
 ## Architecture (target)
 
 ```
@@ -176,9 +210,10 @@ Modules (those marked ✅ exist as of Step 1):
 - `execution/` ✅ — fee-aware, maker-first placement; slippage guard; paper + live brokers; pipeline.
 - `events/` ✅ — economic-calendar event-risk + news/volatility kill-switch + combined posture.
 - `approval/` ✅ — Telegram approve/reject workflow, runtime settings, status, controls.
+- `app/` ✅ — latency/heartbeat monitor with auto-suspend (main-loop assembly pending).
+- `backtest/` ✅ — zero-look-ahead engine, out-of-sample split, net-of-fees report.
 - `regime/` — optional slow uncertainty/sentiment overlay.
 - `store/` — SQLite (SQLAlchemy) models & queries.
-- `app/` — wiring, main loop, graceful shutdown, kill switch.
 
 ---
 
@@ -188,8 +223,8 @@ Modules (those marked ✅ exist as of Step 1):
 2. **✅ Risk engine + tests (floor, limits, daily counters, fee gate, min-notional/spread).**
 3. **✅ Execution layer with paper mode (maker-first, slippage guard); full dry-run pipeline.**
 4. **✅ Event-risk module + news/volatility kill-switch + tests.**
-5. **✅ Telegram bot: alerts, approve/reject, `/settings` menu, status, pause/resume, auth allowlist.** ← you are here
-6. Latency/heartbeat auto-suspend; backtesting + out-of-sample validation net of fees.
+5. **✅ Telegram bot: alerts, approve/reject, `/settings` menu, status, pause/resume, auth allowlist.**
+6. **✅ Latency/heartbeat auto-suspend; backtesting + out-of-sample validation net of fees.** ← you are here
 7. Live sandbox end-to-end with manual approval.
 8. Deployment artifacts (Dockerfile, compose, systemd) + full README.
 

@@ -12,7 +12,7 @@ import dataclasses
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, Protocol
 
 from ..config import Config
 from ..domain import OrderIntent
@@ -38,7 +38,12 @@ class Outcome(str, Enum):
     PENDING_APPROVAL = "pending_approval"
     REJECTED_BY_APPROVAL = "rejected_by_approval"
     PAUSED = "paused"  # event-risk window or kill-switch paused entries
+    SUSPENDED = "suspended"  # latency/heartbeat auto-suspend
     NOT_EXECUTED = "not_executed"  # execution-layer guard (slippage/taker)
+
+
+class HealthGate(Protocol):
+    def trading_allowed(self) -> bool: ...
 
 
 @dataclass
@@ -59,6 +64,7 @@ class TradingPipeline:
         store: RiskStateStore,
         approver: Approver | None = None,
         posture_provider: PostureProvider | None = None,
+        health: HealthGate | None = None,
     ) -> None:
         self.config = config
         self.engine = engine
@@ -66,9 +72,20 @@ class TradingPipeline:
         self.store = store
         self.approver = approver
         self.posture_provider = posture_provider
+        self.health = health
 
     async def process(self, intent: OrderIntent, snapshot: AccountSnapshot) -> PipelineResult:
-        # Event-risk / kill-switch posture is consulted first so a paused state
+        # Connection health first: a degraded/disconnected session auto-suspends
+        # new entries regardless of anything else.
+        if (
+            self.health is not None
+            and intent.is_entry
+            and not self.health.trading_allowed()
+        ):
+            logger.info("Entry suspended by health monitor")
+            return PipelineResult(intent, None, Outcome.SUSPENDED)
+
+        # Event-risk / kill-switch posture is consulted next so a paused state
         # short-circuits before any order work, and size is reduced *before* the
         # risk engine sees the intent.
         posture = CombinedPosture()

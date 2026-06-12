@@ -98,3 +98,6 @@ app:
   db_url: "sqlite:///tradingbot.db"
   heartbeat_interval_seconds: 15
   max_api_latency_ms: 2000          # auto-suspend trading if round-trip latency exceeds this
+  max_consecutive_failures: 3       # consecutive bad/failed pings before auto-suspend
+  health_recovery_samples: 3        # consecutive healthy pings before auto-resume
+  cancel_orders_on_suspend: true    # cancel resting bot orders when latency/connection degrades

@@ -162,6 +162,9 @@ class AppConfig(BaseModel):
     db_url: str = "sqlite:///tradingbot.db"
     heartbeat_interval_seconds: int = Field(default=15, gt=0)
     max_api_latency_ms: int = Field(default=2000, gt=0)
+    max_consecutive_failures: int = Field(default=3, gt=0)
+    health_recovery_samples: int = Field(default=3, gt=0)
+    cancel_orders_on_suspend: bool = True
 
 
 class Config(BaseModel):
