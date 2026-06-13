@@ -170,6 +170,17 @@ def _fetch_data(settings: Settings, args) -> int:
 
     cfg = settings.config
     symbol = args.symbol or cfg.exchange.symbols_allowlist[0]
+
+    # CoinGecko fallback: public aggregator, no API key, no geo-block, plain HTTPS.
+    if (args.exchange or "").lower() == "coingecko":
+        from .backtest.data import save_csv
+        from .exchange.coingecko import fetch_daily
+
+        candles = fetch_daily(symbol, days=min(365, args.months * 30))
+        save_csv(args.out, candles)
+        logger.info("Saved %d daily candles from CoinGecko to %s", len(candles), args.out)
+        return 0
+
     # data fetch is read-only public history: force the live endpoint, and allow
     # overriding the venue (e.g. fetch from a deep-history exchange for training).
     ex_cfg = cfg.exchange.model_copy(update={"sandbox": False})
