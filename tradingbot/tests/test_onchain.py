@@ -9,6 +9,7 @@ from tradingbot.domain import OrderIntent, OrderType, Side
 from tradingbot.exchange.onchain import MvrvPoint, mvrv_z_from_caps, parse_bgeometrics
 from tradingbot.exchange.models import Candle, Ticker
 from tradingbot.exchange.stooq import parse_stooq_csv
+from tradingbot.exchange.yahoo import parse_yahoo_chart
 from tradingbot.strategy.base import MarketData, Strategy
 from tradingbot.strategy.onchain import MvrvFilteredStrategy, MvrvOverlay, MvrvSeries
 
@@ -116,3 +117,25 @@ def test_parse_stooq_csv() -> None:
 def test_parse_stooq_skips_bad_rows() -> None:
     text = "Date,Open,High,Low,Close,Volume\n2024-01-02,470,472,469,N/A,0\n"
     assert parse_stooq_csv(text) == []
+
+
+# --- Yahoo chart API --------------------------------------------------------
+def test_parse_yahoo_chart() -> None:
+    payload = {"chart": {"result": [{
+        "timestamp": [1704153600, 1704240000, 1704326400],
+        "indicators": {"quote": [{
+            "open": [470.0, 471.0, None],   # third bar has a null -> skipped
+            "high": [472.0, 471.5, None],
+            "low": [469.0, 466.0, None],
+            "close": [471.2, 467.3, None],
+            "volume": [1_000_000, 1_200_000, None],
+        }]},
+    }]}}
+    candles = parse_yahoo_chart(payload)
+    assert len(candles) == 2
+    assert candles[0].timestamp == 1704153600000
+    assert candles[1].close == 467.3
+
+
+def test_parse_yahoo_chart_empty() -> None:
+    assert parse_yahoo_chart({"chart": {"result": None}}) == []

@@ -205,10 +205,24 @@ def _fetch_data(settings: Settings, args) -> int:
                     len(candles), symbol or "spy.us", args.out)
         return 0
 
+    # Yahoo Finance chart API: free daily OHLC for stocks/ETFs/bonds (no key).
+    # e.g. --exchange yahoo --symbol SPY  (equities), TLT / AGG (bonds).
+    if (args.exchange or "").lower() == "yahoo":
+        from .backtest.data import save_csv
+        from .exchange.yahoo import fetch_yahoo
+
+        years = max(1, args.months // 12)
+        range_ = "max" if years >= 10 else f"{years}y"
+        candles = fetch_yahoo(symbol or "SPY", range_=range_)
+        save_csv(args.out, candles)
+        logger.info("Saved %d daily candles from Yahoo (%s, %s) to %s",
+                    len(candles), symbol or "SPY", range_, args.out)
+        return 0
+
     # Local CSV convert (no network): turn a browser-downloaded daily file
     # (Yahoo Finance: Date,Open,High,Low,Close,Adj Close,Volume) into our format.
     # e.g. --exchange localcsv --csv ~/Downloads/SPY.csv --out data/spy.csv
-    if (args.exchange or "").lower() in ("localcsv", "yahoo"):
+    if (args.exchange or "").lower() == "localcsv":
         from pathlib import Path
 
         from .backtest.data import save_csv
