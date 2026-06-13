@@ -47,6 +47,10 @@ class CcxtClient(Protocol):
     async def fetch_open_orders(
         self, symbol: str | None = ..., params: dict[str, Any] = ...
     ) -> list[dict[str, Any]]: ...
+    async def fetch_funding_rate_history(
+        self, symbol: str | None = ..., since: int | None = ..., limit: int | None = ...,
+        params: dict[str, Any] = ...,
+    ) -> list[dict[str, Any]]: ...
     async def close(self) -> None: ...
 
 
@@ -114,6 +118,20 @@ class ExchangeAdapter:
 
     async def fetch_open_orders(self, symbol: str | None = None) -> list[dict[str, Any]]:
         return await self._client.fetch_open_orders(symbol)
+
+    async def fetch_funding_rate_history(
+        self, symbol: str, since: int | None = None, limit: int = 1000
+    ) -> list["FundingRate"]:
+        from .funding import FundingRate
+
+        raw = await self._client.fetch_funding_rate_history(symbol, since, limit)
+        out: list[FundingRate] = []
+        for r in raw:
+            rate = r.get("fundingRate")
+            ts = r.get("timestamp")
+            if rate is not None and ts is not None:
+                out.append(FundingRate(int(ts), float(rate)))
+        return out
 
     async def close(self) -> None:
         try:

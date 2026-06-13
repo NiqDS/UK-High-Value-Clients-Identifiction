@@ -324,8 +324,34 @@ def _chart_events(settings: Settings, args) -> int:
     return 0
 
 
+def _fetch_funding(settings: Settings, args) -> int:
+    from .exchange.funding import fetch_funding_vision, save_funding_csv
+
+    venue = (args.exchange or "binancevision").lower()
+    symbol = args.symbol or "BTCUSDT"
+    if venue in ("binancevision", "binance-vision"):
+        rates = fetch_funding_vision(symbol, months=args.months)
+    else:
+        from .exchange.factory import build_adapter
+
+        ex_cfg = settings.config.exchange.model_copy(update={"sandbox": False, "name": venue})
+
+        async def _go():
+            adapter = build_adapter(ex_cfg, settings.secrets)
+            try:
+                await adapter.load_markets()
+                return await adapter.fetch_funding_rate_history(symbol, limit=1000)
+            finally:
+                await adapter.close()
+
+        rates = asyncio.run(_go())
+    save_funding_csv(args.out, rates)
+    logger.info("Saved %d funding rows to %s", len(rates), args.out)
+    return 0
+
+
 def _compare(settings: Settings, args) -> int:
-    from .backtest.compare import default_experiments, run_comparison
+    from .backtest.compare import default_experiments, funding_experiments, run_comparison
     from .backtest.data import load_csv
     from .backtest.engine import BacktestConfig
     from .backtest.metrics import METRICS
@@ -346,6 +372,15 @@ def _compare(settings: Settings, args) -> int:
                             slippage_pct=args.slippage, oos_ratio=args.oos)
     metric = METRICS[args.metric]
     experiments = default_experiments(cfg.strategy)
+    if args.funding_csv:
+        from .exchange.funding import load_funding_csv
+        from .strategy.funding import FundingOverlay, FundingSeries
+
+        series = FundingSeries(load_funding_csv(args.funding_csv))
+        overlay = FundingOverlay(cfg.funding)
+        experiments += funding_experiments(
+            cfg.strategy, series, overlay, cfg.funding.gate_longs_when_crowded)
+        data_note += f" + funding {args.funding_csv} ({len(series.rates)} rows)"
     _, table = run_comparison(candles, experiments, bt_cfg, metric)
     report = f"# Strategy comparison — {data_note}\n- fees {bt_cfg.fee_pct}%/side, " \
              f"slippage {bt_cfg.slippage_pct}%/fill\n\n{table}\n"
@@ -555,7 +590,7 @@ def main() -> int:
         "command",
         choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
-                 "regime"],
+                 "regime", "fetch-funding"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -584,6 +619,8 @@ def main() -> int:
     parser.add_argument("--swing", type=int, default=20, help="swing window (bars) for extrema")
     parser.add_argument("--window", type=int, default=7, help="event match window (days)")
     parser.add_argument("--events-csv", default=None, help="extra events CSV (date,label,kind)")
+    parser.add_argument("--funding-csv", default=None,
+                        help="funding-rate CSV to add funding-overlay variants to compare")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)
@@ -615,6 +652,8 @@ def main() -> int:
         return _chart_events(settings, args)
     if args.command == "regime":
         return _regime(settings, args)
+    if args.command == "fetch-funding":
+        return _fetch_funding(settings, args)
     return 2  # pragma: no cover
 
 

@@ -77,6 +77,27 @@ def default_experiments(base: StrategyConfig) -> list[Experiment]:
     ]
 
 
+def funding_experiments(base: StrategyConfig, series, overlay, gate: bool) -> list[Experiment]:
+    """Wrap the baseline + reversion strategies with the funding overlay so its
+    out-of-sample contribution is measured the same way."""
+    from ..strategy.funding import FundingFilteredStrategy
+
+    def c(**kw) -> StrategyConfig:
+        return base.model_copy(update=kw)
+
+    return [
+        Experiment(
+            "baseline+funding",
+            lambda: FundingFilteredStrategy(
+                SmaCrossoverStrategy(c(vwap_filter_enabled=False)), series, overlay, gate),
+            "funding_overlay", single=False),
+        Experiment(
+            "reversion+funding",
+            lambda: FundingFilteredStrategy(VwapReversionStrategy(c()), series, overlay, gate),
+            "funding+reversion", single=False),
+    ]
+
+
 def score_experiment(candles, exp: Experiment, bt_config: BacktestConfig, metric: Metric) -> ExpScore:
     oos = Backtester(bt_config).run_oos(candles, exp.factory)[1]
     return ExpScore(

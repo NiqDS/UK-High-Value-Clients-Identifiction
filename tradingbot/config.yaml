@@ -111,6 +111,15 @@ regime:
   sma_weeks: 200                    # the "generational" long SMA (accumulation floor)
   cycle_months: 48.0                # halving cycle length
 
+# --- Funding-rate positioning overlay (contrarian; fade crowded leverage) --
+funding:
+  enabled: false                    # scales long size by funding z-score; NOT a direction call
+  z_window: 30                      # funding periods (8h each) for the z-score
+  extreme_z: 1.5                    # |z| beyond this = crowded positioning
+  min_mult: 0.25                    # smallest long size when longs are crowded
+  max_mult: 1.0                     # full size when funding is favorable (negative)
+  gate_longs_when_crowded: false    # hard-skip new longs when funding is extreme
+
 # --- Telegram approval + control. Locked to allowlisted chat IDs. ----------
 telegram:
   enabled: true

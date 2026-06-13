@@ -193,6 +193,23 @@ class StrategyConfig(BaseModel):
         return self
 
 
+class FundingConfig(BaseModel):
+    """Perp funding-rate positioning overlay (contrarian: fade crowded leverage)."""
+
+    enabled: bool = False
+    z_window: int = Field(default=30, gt=1)         # funding periods for the z-score
+    extreme_z: float = Field(default=1.5, gt=0.0)   # |z| beyond this = crowded positioning
+    min_mult: float = Field(default=0.25, ge=0.0, le=1.0)
+    max_mult: float = Field(default=1.0, ge=0.0, le=1.0)
+    gate_longs_when_crowded: bool = False           # hard-skip longs when funding is extreme
+
+    @model_validator(mode="after")
+    def _check_bounds(self) -> "FundingConfig":
+        if self.min_mult > self.max_mult:
+            raise ValueError("funding.min_mult must be <= max_mult")
+        return self
+
+
 class TelegramConfig(BaseModel):
     enabled: bool = True
     approval_threshold_quote: float = Field(default=0.0, ge=0.0)
@@ -236,6 +253,7 @@ class Config(BaseModel):
     events: EventConfig = Field(default_factory=EventConfig)
     kill_switch: KillSwitchConfig = Field(default_factory=KillSwitchConfig)
     regime: RegimeConfig = Field(default_factory=RegimeConfig)
+    funding: FundingConfig = Field(default_factory=FundingConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     reporting: ReportingConfig = Field(default_factory=ReportingConfig)
     app: AppConfig = Field(default_factory=AppConfig)
