@@ -261,6 +261,7 @@ def _build_runner(settings: Settings):
     from .execution.broker import LiveBroker, PaperBroker
     from .execution.executor import Executor
     from .execution.pipeline import TradingPipeline
+    from .reporting.email_sender import build_email_sender
     from .reporting.weekly import WeeklyReporter
     from .risk.engine import RiskEngine
     from .store import SqliteRiskStateStore, TradeLog, make_session_factory
@@ -286,6 +287,7 @@ def _build_runner(settings: Settings):
     health = HealthMonitor(cfg.app)
     portfolio = PositionTracker()
     reporter = WeeklyReporter(trade_log)
+    email_sender = build_email_sender(cfg.reporting, settings.secrets)
 
     # optional Telegram approval + control + alerts
     approver = None
@@ -327,6 +329,7 @@ def _build_runner(settings: Settings):
         store=store, trade_log=trade_log, portfolio=portfolio, kill_switch=kill_switch,
         event_module=event_module, health=health, reporter=reporter,
         report_deliver=report_deliver, report_path="reports/weekly_latest.md",
+        email_sender=email_sender,
     )
     return runner, bot, signal
 

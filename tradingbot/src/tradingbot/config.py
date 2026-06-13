@@ -37,6 +37,8 @@ class Secrets(BaseSettings):
     exchange_api_secret: SecretStr = SecretStr("")
     exchange_api_password: SecretStr = SecretStr("")
     telegram_bot_token: SecretStr = SecretStr("")
+    smtp_username: SecretStr = SecretStr("")
+    smtp_password: SecretStr = SecretStr("")
 
     @property
     def has_exchange_credentials(self) -> bool:
@@ -187,12 +189,24 @@ class TelegramConfig(BaseModel):
     allowed_chat_ids: list[int] = Field(default_factory=list)
 
 
+class ReportingConfig(BaseModel):
+    weekly_enabled: bool = True
+    weekly_day: int = Field(default=0, ge=0, le=6)  # 0=Mon .. 6=Sun
+    weekly_hour_utc: int = Field(default=8, ge=0, le=23)
+    email_enabled: bool = False
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = Field(default=587, gt=0)
+    smtp_use_tls: bool = True
+    email_from: str = ""
+    email_to: list[str] = Field(default_factory=list)
+
+
 class AppConfig(BaseModel):
     dry_run: bool = True
     trading_enabled: bool = True
     log_level: str = "INFO"
     log_json: bool = False
-    db_url: str = "sqlite:///tradingbot.db"
+    db_url: str = "sqlite:///data/tradingbot.db"
     heartbeat_interval_seconds: int = Field(default=15, gt=0)
     max_api_latency_ms: int = Field(default=2000, gt=0)
     max_consecutive_failures: int = Field(default=3, gt=0)
@@ -212,6 +226,7 @@ class Config(BaseModel):
     kill_switch: KillSwitchConfig = Field(default_factory=KillSwitchConfig)
     regime: RegimeConfig = Field(default_factory=RegimeConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    reporting: ReportingConfig = Field(default_factory=ReportingConfig)
     app: AppConfig = Field(default_factory=AppConfig)
 
     @model_validator(mode="after")

@@ -24,3 +24,8 @@ venv/
 # Logs
 *.log
 logs/
+
+# Runtime data / reports / overrides
+data/
+reports/
+runtime_overrides.json

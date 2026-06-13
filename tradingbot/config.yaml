@@ -109,13 +109,26 @@ telegram:
   approval_timeout_seconds: 300     # auto-REJECT if not approved in time
   allowed_chat_ids: []              # numeric chat/user IDs allowed to control the bot
 
+# --- Reporting: weekly performance report (Telegram + optional email) ------
+reporting:
+  weekly_enabled: true
+  weekly_day: 0                     # 0=Mon .. 6=Sun — day the weekly report is sent
+  weekly_hour_utc: 8                # hour (UTC) the weekly report is sent
+  email_enabled: false              # also email the weekly report
+  smtp_host: smtp.gmail.com
+  smtp_port: 587
+  smtp_use_tls: true                # STARTTLS
+  email_from: ""                    # sender address (e.g. your Gmail)
+  email_to: []                      # recipient(s), e.g. ["you@example.com"]
+  # SMTP_USERNAME / SMTP_PASSWORD go in .env (Gmail: use an App Password)
+
 # --- App / runtime ---------------------------------------------------------
 app:
   dry_run: true                     # paper mode — simulate fills, no live orders. ON by default.
   trading_enabled: true             # master flag; flipped false on floor breach / kill switch
   log_level: INFO
   log_json: false
-  db_url: "sqlite:///tradingbot.db"
+  db_url: "sqlite:///data/tradingbot.db"   # parent dir auto-created; persist ./data in Docker
   heartbeat_interval_seconds: 15
   max_api_latency_ms: 2000          # auto-suspend trading if round-trip latency exceeds this
   max_consecutive_failures: 3       # consecutive bad/failed pings before auto-suspend

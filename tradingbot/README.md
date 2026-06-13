@@ -12,15 +12,14 @@ setting defaults to its most conservative value.
 
 ---
 
-## ⚠️ Build status — Step 7 of 8
+## ⚠️ Build status — all 8 steps in place
 
-Delivered so far: Steps 1–6 (risk engine, execution, events/kill-switch,
-Telegram bot, heartbeat, backtester) plus **Step 7 — the live runner**:
-the orchestrated loop, position tracking, SQLite persistence (trade log +
-counters + flags), the trade-only-key startup self-check, and the **weekly
-performance report** vs a market benchmark. What remains: deployment artifacts
-(Step 8). The runner defaults to **paper + sandbox**; do not point it at real
-funds until you have validated end-to-end.
+Steps 1–8 are implemented: risk engine, execution, events/kill-switch, Telegram
+bot, heartbeat, backtester + walk-forward learning, the live runner (position
+tracking, SQLite persistence, trade-only-key self-check, weekly report via
+Telegram **and email**), and deployment artifacts (Dockerfile, docker-compose,
+systemd). The runner defaults to **paper + sandbox**; validate end-to-end on the
+sandbox before pointing it at real funds.
 
 What works today:
 
@@ -311,17 +310,70 @@ Modules (those marked ✅ exist as of Step 1):
 4. **✅ Event-risk module + news/volatility kill-switch + tests.**
 5. **✅ Telegram bot: alerts, approve/reject, `/settings` menu, status, pause/resume, auth allowlist.**
 6. **✅ Latency/heartbeat auto-suspend; backtesting + out-of-sample validation net of fees.**
-7. **✅ Live sandbox runner end-to-end (position tracking, SQLite, weekly report, trade-only-key self-check).** ← you are here
-8. Deployment artifacts (Dockerfile, compose, systemd) + full README.
+7. **✅ Live sandbox runner end-to-end (position tracking, SQLite, weekly report, trade-only-key self-check).**
+8. **✅ Deployment artifacts (Dockerfile, docker-compose, systemd) + email reports + README.** ← you are here
 
 ---
 
-## Remote / headless deployment (target — Step 8)
+## Weekly report by email
 
-Designed to run on a VPS/container near the exchange (latency matters). All
-endpoints/keys live in env/config. Document and apply the exchange's IP
-allowlist for the server's egress IP. systemd unit, Dockerfile, and
-docker-compose ship in Step 8.
+The weekly report can also be emailed on a fixed schedule. In `config.yaml`:
+
+```yaml
+reporting:
+  weekly_enabled: true
+  weekly_day: 0            # 0=Mon .. 6=Sun
+  weekly_hour_utc: 8       # 08:00 UTC
+  email_enabled: true
+  smtp_host: smtp.gmail.com
+  smtp_port: 587
+  email_from: "you@gmail.com"
+  email_to: ["you@gmail.com"]
+```
+
+Put SMTP credentials in `.env` (`SMTP_USERNAME`, `SMTP_PASSWORD`). For Gmail,
+create an **App Password** (Google Account → Security → 2-Step Verification →
+App passwords) — not your normal password. The report still goes to Telegram too
+when that's configured.
+
+## Remote / headless deployment (server / VPS)
+
+Runs headless on a VPS or always-on machine near the exchange. No inbound ports
+are needed — you control it over Telegram. Keep the server's clock in UTC and
+**disable sleep/suspend** if it's a laptop. Apply the exchange's IP allowlist to
+the server's egress IP if you enable that on the key.
+
+**Requirements:** Linux (Ubuntu recommended for systemd/Docker) — macOS works
+too; either Docker, *or* Python 3.11+. Persistent disk for `data/` (the SQLite
+trade log) and `reports/`. A trade-only API key (withdrawals disabled).
+
+### Option A — Docker (simplest)
+
+```bash
+cp .env.example .env          # fill in secrets
+# edit config.yaml (keep dry_run + sandbox true until validated)
+docker compose up -d --build
+docker compose logs -f
+```
+
+`data/` and `reports/` are mounted as volumes so the trade history survives
+restarts and rebuilds. `restart: unless-stopped` brings it back after a reboot.
+
+### Option B — systemd (no Docker)
+
+```bash
+sudo mkdir -p /opt/tradingbot && sudo chown $USER /opt/tradingbot
+# copy the project there, then:
+cd /opt/tradingbot
+python3 -m venv .venv && .venv/bin/pip install .
+cp .env.example .env          # fill in secrets
+sudo cp deploy/tradingbot.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now tradingbot
+journalctl -u tradingbot -f
+```
+
+Both run `python -m tradingbot run` and stop gracefully on SIGTERM (cancel/flush
+per config, persist state).
 
 ## Safety nets
 

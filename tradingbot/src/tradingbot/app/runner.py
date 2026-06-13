@@ -23,6 +23,17 @@ from .portfolio import PositionTracker
 logger = logging.getLogger(__name__)
 
 
+def next_report_time(now: datetime, weekday: int, hour_utc: int) -> datetime:
+    """Next UTC datetime at the given weekday (0=Mon..6=Sun) and hour, strictly
+    after ``now``."""
+    candidate = now.replace(hour=hour_utc, minute=0, second=0, microsecond=0)
+    days_ahead = (weekday - now.weekday()) % 7
+    candidate += timedelta(days=days_ahead)
+    if candidate <= now:
+        candidate += timedelta(days=7)
+    return candidate
+
+
 class TradingRunner:
     def __init__(
         self,
@@ -38,8 +49,9 @@ class TradingRunner:
         event_module=None,
         health: HealthMonitor | None = None,
         reporter=None,
-        report_deliver=None,  # async (text) -> None
+        report_deliver=None,  # async (text) -> None  (e.g. Telegram)
         report_path: str | None = None,
+        email_sender=None,    # EmailSender | None
     ) -> None:
         self.settings = settings
         self.cfg = settings.config
@@ -55,6 +67,7 @@ class TradingRunner:
         self.reporter = reporter
         self.report_deliver = report_deliver
         self.report_path = report_path
+        self.email_sender = email_sender
         self._stop = asyncio.Event()
         self._week_first_price: dict[str, float] = {}
         self._last_price: dict[str, float] = {}
@@ -173,7 +186,13 @@ class TradingRunner:
             try:
                 await self.report_deliver(text)
             except Exception:
-                logger.exception("weekly report delivery failed")
+                logger.exception("weekly report telegram delivery failed")
+        if self.email_sender is not None:
+            try:
+                subject = f"tradingbot weekly report — {(now or datetime.now(timezone.utc)).date()}"
+                await asyncio.to_thread(self.email_sender.send, subject, text)
+            except Exception:
+                logger.exception("weekly report email delivery failed")
         self._week_first_price = dict(self._last_price)  # reset the benchmark window
         return text
 
@@ -197,9 +216,13 @@ class TradingRunner:
             tasks.append(asyncio.create_task(self.health.run(ping, self._stop)))
 
         interval = self.cfg.app.heartbeat_interval_seconds
-        next_report = datetime.now(timezone.utc) + timedelta(days=7)
-        logger.info("Runner started (dry_run=%s, symbols=%s)",
-                    self.cfg.app.dry_run, self.cfg.exchange.symbols_allowlist)
+        rep = self.cfg.reporting
+        next_report = (
+            next_report_time(datetime.now(timezone.utc), rep.weekly_day, rep.weekly_hour_utc)
+            if rep.weekly_enabled else None
+        )
+        logger.info("Runner started (dry_run=%s, symbols=%s); next weekly report: %s",
+                    self.cfg.app.dry_run, self.cfg.exchange.symbols_allowlist, next_report)
         try:
             while not self._stop.is_set():
                 for symbol in self.cfg.exchange.symbols_allowlist:
@@ -208,9 +231,9 @@ class TradingRunner:
                     except Exception:
                         logger.exception("run_once failed for %s", symbol)
                 now = datetime.now(timezone.utc)
-                if now >= next_report:
+                if next_report is not None and now >= next_report:
                     await self.emit_weekly_report(now)
-                    next_report = now + timedelta(days=7)
+                    next_report = next_report_time(now, rep.weekly_day, rep.weekly_hour_utc)
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=interval)
                 except asyncio.TimeoutError:
