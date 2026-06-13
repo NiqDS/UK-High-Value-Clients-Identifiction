@@ -26,6 +26,9 @@ from .coingecko import _ssl_context
 logger = logging.getLogger(__name__)
 
 _CM = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+# BGeometrics: free, no-key on-chain API serving the MVRV Z-score directly
+# (realized cap is a paid metric on Coin Metrics, so we use this instead).
+_BG = "https://bitcoin-data.com/v1/mvrv-zscore"
 # Cloudflare-fronted APIs reject non-browser User-Agents with 403.
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
@@ -76,6 +79,43 @@ def mvrv_z_from_caps(rows: list[tuple[int, float, float]]) -> list[MvrvPoint]:
         std = math.sqrt(m2 / n) if n > 1 else 0.0
         z = (mcap - rcap) / std if std > 0 else 0.0
         out.append(MvrvPoint(ts, round(z, 4)))
+    return out
+
+
+def fetch_mvrv_bgeometrics() -> list[MvrvPoint]:
+    """MVRV Z-score directly from bitcoin-data.com (free, no key). Items look like
+    {"d": "2024-01-01", "unixTs": "1704067200", "mvrvZscore": "2.34"}."""
+    req = urllib.request.Request(_BG, headers={"User-Agent": _UA, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as resp:  # noqa: S310
+        data = json.loads(resp.read().decode())
+    return parse_bgeometrics(data)
+
+
+def parse_bgeometrics(data: list[dict]) -> list[MvrvPoint]:
+    out: list[MvrvPoint] = []
+    for item in data:
+        ts_raw = item.get("unixTs") or item.get("unixts")
+        val = item.get("mvrvZscore")
+        if val is None:  # pick the lone non-date numeric field defensively
+            for k, v in item.items():
+                if k.lower() not in ("d", "date", "unixts", "theday", "daytime"):
+                    val = v
+                    break
+        if val is None:
+            continue
+        if ts_raw is not None:
+            ts = int(float(ts_raw))
+            ts = ts * 1000 if ts < 1_000_000_000_000 else ts
+        elif item.get("d"):
+            ts = int(_dt.datetime.fromisoformat(item["d"]).replace(
+                tzinfo=_dt.timezone.utc).timestamp() * 1000)
+        else:
+            continue
+        try:
+            out.append(MvrvPoint(ts, round(float(val), 4)))
+        except (TypeError, ValueError):
+            continue
+    out.sort(key=lambda p: p.timestamp)
     return out
 
 

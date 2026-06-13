@@ -205,6 +205,24 @@ def _fetch_data(settings: Settings, args) -> int:
                     len(candles), symbol or "spy.us", args.out)
         return 0
 
+    # Local CSV convert (no network): turn a browser-downloaded daily file
+    # (Yahoo Finance: Date,Open,High,Low,Close,Adj Close,Volume) into our format.
+    # e.g. --exchange localcsv --csv ~/Downloads/SPY.csv --out data/spy.csv
+    if (args.exchange or "").lower() in ("localcsv", "yahoo"):
+        from pathlib import Path
+
+        from .backtest.data import save_csv
+        from .exchange.stooq import parse_stooq_csv
+
+        if not args.csv:
+            logger.error("--csv PATH (the downloaded file) is required for localcsv")
+            return 2
+        candles = parse_stooq_csv(Path(args.csv).read_text())
+        save_csv(args.out, candles)
+        logger.info("Converted %d daily candles from %s to %s",
+                    len(candles), args.csv, args.out)
+        return 0
+
     # data fetch is read-only public history: force the live endpoint, and allow
     # overriding the venue (e.g. fetch from a deep-history exchange for training).
     ex_cfg = cfg.exchange.model_copy(update={"sandbox": False})
@@ -363,11 +381,16 @@ def _fetch_funding(settings: Settings, args) -> int:
 
 
 def _fetch_onchain(settings: Settings, args) -> int:
-    from .exchange.onchain import fetch_mvrv_coinmetrics, save_mvrv_csv
+    from .exchange.onchain import fetch_mvrv_bgeometrics, save_mvrv_csv
 
-    points = fetch_mvrv_coinmetrics(start=args.start or "2011-01-01")
+    points = fetch_mvrv_bgeometrics()
+    if not points:
+        logger.error("no MVRV rows fetched (network policy block?). Fallback: download an "
+                     "MVRV-Z series and drop it in as a `timestamp,mvrv_z` CSV.")
+        return 2
     save_mvrv_csv(args.out, points)
-    logger.info("Saved %d MVRV Z-score rows to %s", len(points), args.out)
+    logger.info("Saved %d MVRV Z-score rows to %s (%s..%s)", len(points), args.out,
+                points[0].timestamp, points[-1].timestamp)
     return 0
 
 

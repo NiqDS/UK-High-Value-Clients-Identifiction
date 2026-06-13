@@ -6,7 +6,7 @@ import pytest
 
 from tradingbot.config import MvrvConfig
 from tradingbot.domain import OrderIntent, OrderType, Side
-from tradingbot.exchange.onchain import MvrvPoint, mvrv_z_from_caps
+from tradingbot.exchange.onchain import MvrvPoint, mvrv_z_from_caps, parse_bgeometrics
 from tradingbot.exchange.models import Candle, Ticker
 from tradingbot.exchange.stooq import parse_stooq_csv
 from tradingbot.strategy.base import MarketData, Strategy
@@ -25,6 +25,23 @@ def test_mvrv_z_uses_expanding_std() -> None:
     assert all(p.z >= 0 for p in pts)
     # recomputing with one fewer trailing point doesn't change earlier values
     assert mvrv_z_from_caps(rows[:-1])[5].z == pts[5].z  # causal
+
+
+# --- BGeometrics MVRV-Z API parsing ----------------------------------------
+def test_parse_bgeometrics_unix_seconds() -> None:
+    data = [{"d": "2024-01-01", "unixTs": "1704067200", "mvrvZscore": "2.34"},
+            {"d": "2024-01-02", "unixTs": "1704153600", "mvrvZscore": "2.40"}]
+    pts = parse_bgeometrics(data)
+    assert len(pts) == 2
+    assert pts[0].timestamp == 1704067200000  # seconds -> ms
+    assert pts[0].z == 2.34
+
+
+def test_parse_bgeometrics_date_fallback_and_bad_rows() -> None:
+    data = [{"d": "2024-01-03", "mvrvZscore": "1.10"},  # no unixTs -> parse date
+            {"d": "2024-01-04", "mvrvZscore": None}]     # bad -> skipped
+    pts = parse_bgeometrics(data)
+    assert len(pts) == 1 and pts[0].z == 1.10
 
 
 # --- overlay valuation mapping ---------------------------------------------
