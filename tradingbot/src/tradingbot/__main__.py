@@ -181,6 +181,18 @@ def _fetch_data(settings: Settings, args) -> int:
         logger.info("Saved %d daily candles from CoinGecko to %s", len(candles), args.out)
         return 0
 
+    # Binance public data dumps: REAL intra-bar OHLCV (static CDN files, usually
+    # reachable even when the trading API is geo-blocked).
+    if (args.exchange or "").lower() in ("binancevision", "binance-vision"):
+        from .backtest.data import save_csv
+        from .exchange.binance_vision import fetch_klines
+
+        candles = fetch_klines(symbol or "BTCUSDT", interval=args.timeframe, months=args.months)
+        save_csv(args.out, candles)
+        logger.info("Saved %d %s candles from binance-vision to %s",
+                    len(candles), args.timeframe, args.out)
+        return 0
+
     # data fetch is read-only public history: force the live endpoint, and allow
     # overriding the venue (e.g. fetch from a deep-history exchange for training).
     ex_cfg = cfg.exchange.model_copy(update={"sandbox": False})
@@ -261,6 +273,30 @@ def _walkforward(settings: Settings, args) -> int:
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
         Path(args.report).write_text(report)
         logger.info("wrote walk-forward report to %s", args.report)
+    return 0
+
+
+def _chart_events(settings: Settings, args) -> int:
+    from .analysis.event_study import BUILTIN_EVENTS, load_events_csv, study_events
+    from .backtest.data import load_csv
+
+    if not args.csv:
+        logger.error("--csv PATH is required (OHLC to analyse)")
+        return 2
+    candles = load_csv(args.csv)
+    events = list(BUILTIN_EVENTS)
+    if args.events_csv:
+        events += load_events_csv(args.events_csv)
+    events.sort(key=lambda e: e.date)
+    study = study_events(candles, events, swing_window=args.swing, match_window_days=args.window)
+    report = (f"# Event correspondence — {args.csv} ({len(candles)} bars)\n\n"
+              f"{study.render()}\n")
+    print(report)
+    if args.report:
+        from pathlib import Path
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report)
+        logger.info("wrote event study to %s", args.report)
     return 0
 
 
@@ -492,7 +528,7 @@ def main() -> int:
     parser.add_argument(
         "command",
         choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
-                 "weekly-report", "fetch-data", "walkforward", "compare"],
+                 "weekly-report", "fetch-data", "walkforward", "compare", "chart-events"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -517,6 +553,10 @@ def main() -> int:
     parser.add_argument("--windows", type=int, default=4, help="walk-forward windows (e.g. quarters)")
     parser.add_argument("--samples", type=int, default=40, help="optimizer samples per window")
     parser.add_argument("--metric", default="net_return_over_maxdd", help="scoring metric")
+    # chart-events options
+    parser.add_argument("--swing", type=int, default=20, help="swing window (bars) for extrema")
+    parser.add_argument("--window", type=int, default=7, help="event match window (days)")
+    parser.add_argument("--events-csv", default=None, help="extra events CSV (date,label,kind)")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)
@@ -544,6 +584,8 @@ def main() -> int:
         return _walkforward(settings, args)
     if args.command == "compare":
         return _compare(settings, args)
+    if args.command == "chart-events":
+        return _chart_events(settings, args)
     return 2  # pragma: no cover
 
 
