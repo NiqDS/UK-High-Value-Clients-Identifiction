@@ -16,12 +16,15 @@ python3 -m tradingbot compare --source csv --csv data/btc_1h_real.csv --oos 0.4 
 
 ## The headline conclusion
 
-**No entry edge was found in anything we tested.** On real BTC hourly data, no
-signal predicts direction well enough to overcome fees. Every mechanic that
-"helps" does so by **trading less or smaller** (capital preservation), not by
-trading *better* (alpha). This is the expected, honest outcome — most simple
-price/positioning signals are arbitraged away — and the platform is built to
-*reject* false edges rather than flatter them.
+**No entry edge was found in crypto; the one positive edge was mean-reversion on
+equities.** On real BTC data (hourly and multi-year daily), no signal predicts
+direction well enough to overcome fees — every crypto mechanic that "helps" does
+so by **trading less or smaller** (capital preservation), not by trading *better*
+(alpha). The single exception came when the *same* mean-reversion strategy was
+run on **SPY**, where it was positive out-of-sample (see Cross-asset). The
+takeaway: the volatility/mean-reversion thesis is sound but fits **equity
+indices, not crypto**, and the platform is built to *reject* false edges rather
+than flatter them — which is exactly why the one real edge stands out.
 
 ## What we tested
 
@@ -34,7 +37,25 @@ price/positioning signals are arbitraged away — and the platform is built to
 | Fee-drag controls | selectivity governor | **Helps** (+0.725) — but only by cutting to ~3 trades. It's "trade less," not edge. |
 | VWAP scaled sizing | size governor | Marginal (+0.029). |
 | Cycle regime (200w SMA + halving) | slow risk budget | Exposure governor by construction; not a trade trigger. |
-| **Funding rate** (z-score) | positioning | **No timing edge.** See below. |
+| **Funding rate** (z-score) | positioning | **No timing edge.** Exposure governor (−37% drawdown); see below. |
+| **MVRV Z-score** (on-chain) | valuation | **No edge, best governor.** Cut net loss & drawdown ~17–20% on multi-year daily BTC; nudged the baseline's risk-adjusted score off the floor (−1.000→−0.844) — faint cycle-timing, but still on a losing base. |
+| **Mean-reversion on equities (SPY)** | cross-asset | **POSITIVE OOS** — +0.10% net, 45% win, 62 trades, score +0.99. The one real edge found. See "Cross-asset" below. |
+
+## Cross-asset — the thesis was right, the asset was wrong
+
+The same mean-reversion strategy, run through the identical harness on **SPY**
+(~10y daily, 1bp fees), flips from *worst on crypto* to **best and positive**:
++0.10% net, 0.05% max drawdown, risk-adjusted score **+0.99** over 62 trades.
+On BTC the same strategy lost on every run.
+
+Why: equity indices **mean-revert** (dips bought) with strong upward drift and
+far lower volatility, so "fade the move" works; BTC **trends** and is too
+volatile, so it gets run over. The project's founding thesis — *volatility is
+more predictable than direction* — holds, but it fits **equity indices, not
+crypto.** Caveats: the magnitude is tiny (+0.10% total over the OOS window — beats
+fees, not a money machine); it's one asset / one period / daily bars and needs
+walk-forward + more ETFs to trust; and acting on it needs an **equity broker**
+(this bot trades crypto), so it's a separate build.
 
 ## Funding rate — the most-scrutinized signal
 
