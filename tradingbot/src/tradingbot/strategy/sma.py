@@ -156,6 +156,11 @@ class SmaCrossoverStrategy(Strategy):
             # BUY only when sufficiently undervalued: price at/below the floor vs VWAP.
             if cfg.vwap_filter_enabled and valuation_pct > cfg.buy_valuation_floor_pct:
                 return []
+            # trend/regime filter: only go long with the higher-timeframe trend
+            if cfg.trend_filter_enabled:
+                trend = sma(closes, cfg.trend_period)
+                if trend is None or price <= trend:
+                    return []
             # fee-drag: require a strong-enough crossover and respect a cooldown
             strength = (fast_now - slow_now) / slow_now * 100.0 if slow_now else 0.0
             if strength < cfg.min_crossover_strength_pct:

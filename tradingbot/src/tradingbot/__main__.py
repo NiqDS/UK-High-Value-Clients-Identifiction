@@ -264,6 +264,40 @@ def _walkforward(settings: Settings, args) -> int:
     return 0
 
 
+def _compare(settings: Settings, args) -> int:
+    from .backtest.compare import default_experiments, run_comparison
+    from .backtest.data import load_csv
+    from .backtest.engine import BacktestConfig
+    from .backtest.metrics import METRICS
+    from .backtest.synthetic import synthetic_candles
+
+    cfg = settings.config
+    if args.source == "csv":
+        if not args.csv:
+            logger.error("--csv PATH is required with --source csv")
+            return 2
+        candles = load_csv(args.csv)
+        data_note = f"CSV {args.csv} ({len(candles)} bars)"
+    else:
+        candles = synthetic_candles(n=args.bars, seed=args.seed)
+        data_note = f"SYNTHETIC (seed={args.seed}, {len(candles)} bars) — NOT market data"
+
+    bt_cfg = BacktestConfig(initial_equity=args.equity, fee_pct=args.fee,
+                            slippage_pct=args.slippage, oos_ratio=args.oos)
+    metric = METRICS[args.metric]
+    experiments = default_experiments(cfg.strategy)
+    _, table = run_comparison(candles, experiments, bt_cfg, metric)
+    report = f"# Strategy comparison — {data_note}\n- fees {bt_cfg.fee_pct}%/side, " \
+             f"slippage {bt_cfg.slippage_pct}%/fill\n\n{table}\n"
+    print(report)
+    if args.report:
+        from pathlib import Path
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report)
+        logger.info("wrote comparison report to %s", args.report)
+    return 0
+
+
 def _build_runner(settings: Settings):
     """Wire the full live runner. Heavy imports (ccxt/telegram) are local."""
     import signal
@@ -458,7 +492,7 @@ def main() -> int:
     parser.add_argument(
         "command",
         choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
-                 "weekly-report", "fetch-data", "walkforward"],
+                 "weekly-report", "fetch-data", "walkforward", "compare"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -508,6 +542,8 @@ def main() -> int:
         return _fetch_data(settings, args)
     if args.command == "walkforward":
         return _walkforward(settings, args)
+    if args.command == "compare":
+        return _compare(settings, args)
     return 2  # pragma: no cover
 
 

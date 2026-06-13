@@ -73,6 +73,11 @@ strategy:
   atr_sl_mult: 1.5
   trailing_enabled: false           # ratchet the stop up behind price (ATR-distance)
   trailing_atr_mult: 2.0
+  # Trend/regime filter (only go long when the longer trend agrees):
+  trend_filter_enabled: false
+  trend_period: 100                 # long SMA; entries require price above it
+  # Volatility / mean-reversion thesis (used by the vwap_reversion strategy):
+  reversion_entry_pct: 1.0          # buy when price is this % below VWAP, exit back at VWAP
 
 # --- Scheduled macro events (FOMC, CPI, PPI, NFP...). Manage exposure, not direction.
 events:

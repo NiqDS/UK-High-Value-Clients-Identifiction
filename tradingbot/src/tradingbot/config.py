@@ -169,6 +169,13 @@ class StrategyConfig(BaseModel):
     trailing_enabled: bool = False
     trailing_atr_mult: float = Field(default=2.0, gt=0.0)
 
+    # --- trend/regime filter (only long with the higher-timeframe trend) ---
+    trend_filter_enabled: bool = False
+    trend_period: int = Field(default=100, gt=0)
+
+    # --- volatility / mean-reversion thesis (vwap_reversion strategy) ------
+    reversion_entry_pct: float = Field(default=1.0, gt=0.0)  # buy when this % below VWAP
+
     @model_validator(mode="after")
     def _check_sizing(self) -> "StrategyConfig":
         if self.vwap_size_min_mult > self.vwap_size_max_mult:

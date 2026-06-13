@@ -3,9 +3,11 @@
 from ..config import StrategyConfig
 from .base import MarketData, Strategy
 from .sma import SmaCrossoverStrategy
+from .vwap_reversion import VwapReversionStrategy
 
 _REGISTRY: dict[str, type[Strategy]] = {
     "sma_crossover": SmaCrossoverStrategy,
+    "vwap_reversion": VwapReversionStrategy,
 }
 
 
@@ -16,4 +18,5 @@ def build_strategy(config: StrategyConfig) -> Strategy:
     return cls(config)
 
 
-__all__ = ["MarketData", "Strategy", "SmaCrossoverStrategy", "build_strategy"]
+__all__ = ["MarketData", "Strategy", "SmaCrossoverStrategy", "VwapReversionStrategy",
+           "build_strategy"]
