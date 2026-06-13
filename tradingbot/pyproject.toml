@@ -18,6 +18,7 @@ dependencies = [
     "python-telegram-bot>=20.7",
     "SQLAlchemy>=2.0",
     "python-dotenv>=1.0",
+    "certifi>=2024.0",
 ]
 
 [project.optional-dependencies]

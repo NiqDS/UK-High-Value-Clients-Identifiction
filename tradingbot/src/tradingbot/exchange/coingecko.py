@@ -10,9 +10,21 @@ need real intra-bar ranges).
 from __future__ import annotations
 
 import json
+import ssl
 import urllib.request
 
 from .models import Candle
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """A verified TLS context. Prefer certifi's CA bundle (works even when the
+    macOS python.org build has no system certs installed); fall back to default."""
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 # common base-symbol -> CoinGecko coin id
 _IDS: dict[str, str] = {
@@ -61,6 +73,6 @@ def fetch_daily(symbol: str, days: int = 365, vs_currency: str = "usd") -> list[
         f"?vs_currency={vs_currency}&days={days}"
     )
     req = urllib.request.Request(url, headers={"User-Agent": "tradingbot"})
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310 (trusted host)
+    with urllib.request.urlopen(req, timeout=30, context=_ssl_context()) as resp:  # noqa: S310
         data = json.load(resp)
     return parse_market_chart(data)
