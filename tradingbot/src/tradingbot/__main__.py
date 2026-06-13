@@ -236,7 +236,14 @@ def _fetch_data(settings: Settings, args) -> int:
         if not args.csv:
             logger.error("--csv PATH (the downloaded file) is required for localcsv")
             return 2
+        if not Path(args.csv).exists():
+            logger.error("file not found: %s — check the name in ~/Downloads", args.csv)
+            return 2
         candles = parse_stooq_csv(Path(args.csv).read_text())
+        if not candles:
+            logger.error("parsed 0 candles from %s — is it a daily OHLC CSV with a Date column?",
+                         args.csv)
+            return 2
         save_csv(args.out, candles)
         logger.info("Converted %d daily candles from %s to %s",
                     len(candles), args.csv, args.out)
