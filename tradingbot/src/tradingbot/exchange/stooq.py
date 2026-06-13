@@ -28,19 +28,37 @@ _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 
+def _num(s: str) -> float:
+    return float(str(s).strip().lstrip("$").replace(",", ""))
+
+
+def _ts(date: str) -> int:
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"):
+        try:
+            return int(_dt.datetime.strptime(date.strip(), fmt)
+                       .replace(tzinfo=_dt.timezone.utc).timestamp() * 1000)
+        except ValueError:
+            continue
+    raise ValueError(f"unrecognised date: {date!r}")
+
+
 def parse_stooq_csv(text: str) -> list[Candle]:
+    """Parse a browser-downloaded daily CSV. Tolerant of Stooq / Yahoo / Nasdaq
+    column names, ``$``-prefixed prices, and YYYY-MM-DD or MM/DD/YYYY dates."""
     candles: list[Candle] = []
     for row in csv.DictReader(io.StringIO(text)):
-        date = row.get("Date") or row.get("date")
-        if not date or row.get("Close") in (None, "", "N/A"):
+        # normalise keys (Nasdaq uses 'Close/Last', Yahoo 'Adj Close', etc.)
+        r = {k.strip().lower(): v for k, v in row.items() if k}
+        date = r.get("date")
+        close = r.get("close") or r.get("close/last") or r.get("adj close")
+        if not date or close in (None, "", "N/A"):
             continue
         try:
-            ts = int(_dt.datetime.strptime(date, "%Y-%m-%d")
-                     .replace(tzinfo=_dt.timezone.utc).timestamp() * 1000)
             candles.append(Candle(
-                timestamp=ts, open=float(row["Open"]), high=float(row["High"]),
-                low=float(row["Low"]), close=float(row["Close"]),
-                volume=float(row.get("Volume") or 0.0),
+                timestamp=_ts(date),
+                open=_num(r.get("open") or close), high=_num(r.get("high") or close),
+                low=_num(r.get("low") or close), close=_num(close),
+                volume=_num(r.get("volume") or 0),
             ))
         except (ValueError, KeyError):
             continue

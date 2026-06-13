@@ -213,7 +213,12 @@ def _fetch_data(settings: Settings, args) -> int:
 
         years = max(1, args.months // 12)
         range_ = "max" if years >= 10 else f"{years}y"
-        candles = fetch_yahoo(symbol or "SPY", range_=range_)
+        try:
+            candles = fetch_yahoo(symbol or "SPY", range_=range_)
+        except Exception as exc:
+            logger.error("Yahoo fetch failed (%s) — likely IP rate-limited. Fallback: download "
+                         "the CSV in a browser and use `--exchange localcsv --csv FILE`.", exc)
+            return 2
         save_csv(args.out, candles)
         logger.info("Saved %d daily candles from Yahoo (%s, %s) to %s",
                     len(candles), symbol or "SPY", range_, args.out)

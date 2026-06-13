@@ -68,7 +68,7 @@ def fetch_yahoo(symbol: str = "SPY", range_: str = "max", retries: int = 5) -> l
             last_exc = exc
             if exc.code in (429, 401, 403) and attempt < retries - 1:
                 wait = 5 * (2 ** attempt)  # 5,10,20,40s — Yahoo throttles bursts
-                logger.warning("yahoo: HTTP %d for %s, retry %d/%d in %ds (host rotates)",
+                logger.warning("yahoo: HTTP %s for %s, retry %s/%s in %ss (host rotates)",
                                exc.code, symbol, attempt + 1, retries, wait)
                 time.sleep(wait)
                 continue

@@ -119,6 +119,16 @@ def test_parse_stooq_skips_bad_rows() -> None:
     assert parse_stooq_csv(text) == []
 
 
+def test_parse_nasdaq_format() -> None:
+    # Nasdaq browser export: $-prefixed prices, MM/DD/YYYY dates, 'Close/Last'
+    text = ("Date,Close/Last,Volume,Open,High,Low\n"
+            "01/03/2024,$467.30,1200000,$471.00,$471.00,$466.00\n")
+    candles = parse_stooq_csv(text)
+    assert len(candles) == 1
+    assert candles[0].close == 467.30
+    assert candles[0].low == 466.00
+
+
 # --- Yahoo chart API --------------------------------------------------------
 def test_parse_yahoo_chart() -> None:
     payload = {"chart": {"result": [{
