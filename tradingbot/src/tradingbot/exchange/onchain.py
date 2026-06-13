@@ -26,6 +26,9 @@ from .coingecko import _ssl_context
 logger = logging.getLogger(__name__)
 
 _CM = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics"
+# Cloudflare-fronted APIs reject non-browser User-Agents with 403.
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 
 @dataclass(frozen=True)
@@ -87,7 +90,7 @@ def fetch_mvrv_coinmetrics(start: str = "2011-01-01") -> list[MvrvPoint]:
     rows: list[tuple[int, float, float]] = []
     url = f"{_CM}?{urllib.parse.urlencode(params)}"
     for _ in range(10):  # follow pagination defensively
-        req = urllib.request.Request(url, headers={"User-Agent": "tradingbot"})
+        req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
         with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as resp:  # noqa: S310
             payload = json.loads(resp.read().decode())
         for d in payload.get("data", []):

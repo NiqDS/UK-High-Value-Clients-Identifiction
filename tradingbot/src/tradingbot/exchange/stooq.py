@@ -24,6 +24,8 @@ from .models import Candle
 logger = logging.getLogger(__name__)
 
 _URL = "https://stooq.com/q/d/l/"
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+       "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
 
 def parse_stooq_csv(text: str) -> list[Candle]:
@@ -48,7 +50,7 @@ def parse_stooq_csv(text: str) -> list[Candle]:
 
 def fetch_stooq(symbol: str = "spy.us") -> list[Candle]:
     url = f"{_URL}?s={symbol.lower()}&i=d"
-    req = urllib.request.Request(url, headers={"User-Agent": "tradingbot"})
+    req = urllib.request.Request(url, headers={"User-Agent": _UA})
     with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as resp:  # noqa: S310
         text = resp.read().decode()
     candles = parse_stooq_csv(text)
