@@ -89,7 +89,9 @@ events:
   reduce_size_pct: 50.0             # if entries allowed, cut size by this %
   widen_maker_offset_pct: 0.10      # widen maker spreads during the window
   tighten_stops: true
-  calendar: []                      # list of {name, timestamp_utc} — populate or wire a feed
+  calendar: []                      # inline list of {name, timestamp_utc}
+  calendar_csv: ""                  # OR a CSV feed: columns name,timestamp_utc (FOMC/CPI/NFP...)
+  include_halvings: true            # also treat BTC halving dates as event windows
 
 # --- Unscheduled shocks. Defensive only: pause, never auto-trade the direction.
 kill_switch:
@@ -102,10 +104,12 @@ kill_switch:
 
 # --- Optional slow regime overlay. OFF by default; fragile (see README/backtesting).
 regime:
-  enabled: false
+  enabled: false                    # slow risk-budget scaler (NOT a trade trigger); fragile
   cadence_hours: 24
-  min_risk_multiplier: 0.25
-  max_risk_multiplier: 1.0
+  min_risk_multiplier: 0.25         # smallest fraction of normal size in an unfavorable regime
+  max_risk_multiplier: 1.0          # full size in a favorable regime
+  sma_weeks: 200                    # the "generational" long SMA (accumulation floor)
+  cycle_months: 48.0                # halving cycle length
 
 # --- Telegram approval + control. Locked to allowlisted chat IDs. ----------
 telegram:

@@ -52,6 +52,7 @@ class TradingRunner:
         report_deliver=None,  # async (text) -> None  (e.g. Telegram)
         report_path: str | None = None,
         email_sender=None,    # EmailSender | None
+        regime_overlay=None,  # CycleRegimeOverlay | None
     ) -> None:
         self.settings = settings
         self.cfg = settings.config
@@ -68,9 +69,30 @@ class TradingRunner:
         self.report_deliver = report_deliver
         self.report_path = report_path
         self.email_sender = email_sender
+        self.regime_overlay = regime_overlay
         self._stop = asyncio.Event()
         self._week_first_price: dict[str, float] = {}
         self._last_price: dict[str, float] = {}
+        self._regime_refreshed: datetime | None = None
+
+    async def refresh_regime(self, now: datetime, symbol: str) -> None:
+        """Recompute the slow cycle/regime risk multiplier from daily candles
+        (at most once per configured cadence)."""
+        if self.regime_overlay is None:
+            return
+        cadence_h = self.cfg.regime.cadence_hours
+        if (self._regime_refreshed is not None
+                and (now - self._regime_refreshed).total_seconds() < cadence_h * 3600):
+            return
+        try:
+            daily = await self.adapter.fetch_ohlcv(symbol, "1d", limit=1500)
+            regime = self.regime_overlay.assess(daily, now)
+            self.pipeline.regime_multiplier = regime.multiplier
+            self._regime_refreshed = now
+            logger.info("Regime: %s, x%.2f (%s)", regime.phase, regime.multiplier,
+                        "; ".join(regime.reasons))
+        except Exception:
+            logger.exception("regime refresh failed; keeping previous multiplier")
 
     # -- balance ------------------------------------------------------------
     async def _equity_free(self) -> tuple[float, float]:
@@ -87,6 +109,7 @@ class TradingRunner:
     # -- one pass for one symbol -------------------------------------------
     async def run_once(self, symbol: str, now: datetime | None = None) -> list[PipelineResult]:
         now = now or datetime.now(timezone.utc)
+        await self.refresh_regime(now, symbol)
         candles = await self.adapter.fetch_ohlcv(
             symbol, self.cfg.strategy.timeframe, self.cfg.strategy.ohlcv_limit
         )

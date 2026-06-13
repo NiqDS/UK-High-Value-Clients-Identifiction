@@ -276,6 +276,30 @@ def _walkforward(settings: Settings, args) -> int:
     return 0
 
 
+def _regime(settings: Settings, args) -> int:
+    from .backtest.data import load_csv
+    from .regime.cycle import CycleRegimeOverlay
+
+    if not args.csv:
+        logger.error("--csv PATH is required (daily OHLC for the 200-week SMA)")
+        return 2
+    candles = load_csv(args.csv)
+    # force-enable so the command always shows an assessment
+    overlay = CycleRegimeOverlay(settings.config.regime.model_copy(update={"enabled": True}))
+    r = overlay.assess(candles)
+    print("# Cycle / volatility regime")
+    print(f"phase:            {r.phase}")
+    print(f"risk multiplier:  x{r.multiplier:.2f}  "
+          f"(range {settings.config.regime.min_risk_multiplier}"
+          f"–{settings.config.regime.max_risk_multiplier})")
+    if r.price_to_200w is not None:
+        print(f"price / 200w-SMA: {r.price_to_200w:.2f}x")
+    if r.months_since_halving is not None:
+        print(f"months since halving: {r.months_since_halving:.1f}")
+    print("reasons: " + "; ".join(r.reasons))
+    return 0
+
+
 def _chart_events(settings: Settings, args) -> int:
     from .analysis.event_study import BUILTIN_EVENTS, load_events_csv, study_events
     from .backtest.data import load_csv
@@ -376,6 +400,8 @@ def _build_runner(settings: Settings):
     portfolio = PositionTracker()
     reporter = WeeklyReporter(trade_log)
     email_sender = build_email_sender(cfg.reporting, settings.secrets)
+    from .regime.cycle import CycleRegimeOverlay
+    regime_overlay = CycleRegimeOverlay(cfg.regime) if cfg.regime.enabled else None
 
     # optional Telegram approval + control + alerts
     approver = None
@@ -417,7 +443,7 @@ def _build_runner(settings: Settings):
         store=store, trade_log=trade_log, portfolio=portfolio, kill_switch=kill_switch,
         event_module=event_module, health=health, reporter=reporter,
         report_deliver=report_deliver, report_path="reports/weekly_latest.md",
-        email_sender=email_sender,
+        email_sender=email_sender, regime_overlay=regime_overlay,
     )
     return runner, bot, signal
 
@@ -528,7 +554,8 @@ def main() -> int:
     parser.add_argument(
         "command",
         choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
-                 "weekly-report", "fetch-data", "walkforward", "compare", "chart-events"],
+                 "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
+                 "regime"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -586,6 +613,8 @@ def main() -> int:
         return _compare(settings, args)
     if args.command == "chart-events":
         return _chart_events(settings, args)
+    if args.command == "regime":
+        return _regime(settings, args)
     return 2  # pragma: no cover
 
 

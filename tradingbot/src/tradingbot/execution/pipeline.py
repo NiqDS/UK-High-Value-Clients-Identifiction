@@ -77,6 +77,9 @@ class TradingPipeline:
         self.posture_provider = posture_provider
         self.health = health
         self.emergency_alert = emergency_alert
+        # Slow cycle/regime risk-budget multiplier, updated externally (the runner
+        # refreshes it daily). 1.0 = neutral. Applied to entry size.
+        self.regime_multiplier = 1.0
 
     async def process(self, intent: OrderIntent, snapshot: AccountSnapshot) -> PipelineResult:
         # Connection health first: a degraded/disconnected session auto-suspends
@@ -102,6 +105,10 @@ class TradingPipeline:
                 intent = dataclasses.replace(
                     intent, amount=intent.amount * posture.size_multiplier
                 )
+
+        # Slow regime overlay scales entry size (risk budget), never direction.
+        if intent.is_entry and self.regime_multiplier != 1.0:
+            intent = dataclasses.replace(intent, amount=intent.amount * self.regime_multiplier)
 
         decision = self.engine.evaluate(intent, snapshot)
         logger.info(

@@ -7,10 +7,15 @@ the release to account for pre-announcement drift.
 
 from __future__ import annotations
 
+import csv
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from ..config import EventConfig
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -23,6 +28,25 @@ class ScheduledEvent:
             self.timestamp - timedelta(minutes=pre_minutes),
             self.timestamp + timedelta(minutes=post_minutes),
         )
+
+
+def load_calendar_csv(path: str | Path) -> list[ScheduledEvent]:
+    """Load scheduled events from a CSV feed: columns name, timestamp_utc.
+
+    e.g. FOMC/CPI/NFP release times exported from an economic calendar.
+    """
+    p = Path(path)
+    if not p.exists():
+        logger.warning("event calendar CSV not found: %s", p)
+        return []
+    out: list[ScheduledEvent] = []
+    with p.open(newline="") as f:
+        for row in csv.DictReader(f):
+            ts = row.get("timestamp_utc") or row.get("timestamp") or row.get("date")
+            if not ts:
+                continue
+            out.append(ScheduledEvent(name=row.get("name", "event"), timestamp=_parse_ts(ts)))
+    return out
 
 
 def _parse_ts(value: str | datetime) -> datetime:
@@ -48,6 +72,11 @@ class EventCalendar:
             if ts is None:
                 continue
             events.append(ScheduledEvent(name=str(raw.get("name", "event")), timestamp=_parse_ts(ts)))
+        if config.calendar_csv:
+            events += load_calendar_csv(config.calendar_csv)
+        if config.include_halvings:
+            from ..regime.cycle import BUILTIN_HALVINGS
+            events += [ScheduledEvent(name="BTC halving", timestamp=h) for h in BUILTIN_HALVINGS]
         return cls(events)
 
     def active_events(

@@ -108,6 +108,8 @@ class EventConfig(BaseModel):
     widen_maker_offset_pct: float = _pct(0.10)
     tighten_stops: bool = True
     calendar: list[dict[str, Any]] = Field(default_factory=list)
+    calendar_csv: str = ""           # optional CSV feed: name,timestamp_utc
+    include_halvings: bool = True    # add BTC halving dates to the event calendar
 
 
 class KillSwitchConfig(BaseModel):
@@ -124,6 +126,8 @@ class RegimeConfig(BaseModel):
     cadence_hours: int = Field(default=24, gt=0)
     min_risk_multiplier: float = Field(default=0.25, ge=0.0, le=1.0)
     max_risk_multiplier: float = Field(default=1.0, ge=0.0, le=1.0)
+    sma_weeks: int = Field(default=200, gt=0)           # the "generational" long SMA
+    cycle_months: float = Field(default=48.0, gt=0.0)   # halving cycle length
 
     @model_validator(mode="after")
     def _check_range(self) -> "RegimeConfig":
