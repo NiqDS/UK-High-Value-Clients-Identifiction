@@ -55,5 +55,6 @@ def fetch_stooq(symbol: str = "spy.us") -> list[Candle]:
         text = resp.read().decode()
     candles = parse_stooq_csv(text)
     if not candles:
-        logger.warning("stooq: no candles parsed for %s (rate-limited or bad symbol?)", symbol)
+        logger.warning("stooq: 0 candles for %s. Server returned: %r",
+                       symbol, text[:200])
     return candles

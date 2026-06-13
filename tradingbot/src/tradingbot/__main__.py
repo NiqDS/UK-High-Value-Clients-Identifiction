@@ -396,18 +396,30 @@ def _compare(settings: Settings, args) -> int:
     metric = METRICS[args.metric]
     experiments = default_experiments(cfg.strategy)
     if args.funding_csv:
+        from pathlib import Path
+
         from .exchange.funding import load_funding_csv
         from .strategy.funding import FundingOverlay, FundingSeries
 
+        if not Path(args.funding_csv).exists():
+            logger.error("funding CSV not found: %s — run `fetch-funding`, or drop in a "
+                         "timestamp,funding_rate file", args.funding_csv)
+            return 2
         series = FundingSeries(load_funding_csv(args.funding_csv))
         overlay = FundingOverlay(cfg.funding)
         gate = args.funding_gate or cfg.funding.gate_longs_when_crowded
         experiments += funding_experiments(cfg.strategy, series, overlay, gate)
         data_note += f" + funding {args.funding_csv} ({len(series.rates)} rows)"
     if args.mvrv_csv:
+        from pathlib import Path
+
         from .exchange.onchain import load_mvrv_csv
         from .strategy.onchain import MvrvOverlay, MvrvSeries
 
+        if not Path(args.mvrv_csv).exists():
+            logger.error("mvrv CSV not found: %s — run `fetch-onchain`, or drop in a "
+                         "timestamp,mvrv_z file", args.mvrv_csv)
+            return 2
         mseries = MvrvSeries(load_mvrv_csv(args.mvrv_csv))
         moverlay = MvrvOverlay(cfg.mvrv)
         mgate = args.mvrv_gate or cfg.mvrv.gate_when_rich
