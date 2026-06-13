@@ -20,7 +20,7 @@ from .models import Candle
 
 logger = logging.getLogger(__name__)
 
-_URL = "https://query1.finance.yahoo.com/v8/finance/chart/"
+_HOSTS = ["https://query1.finance.yahoo.com", "https://query2.finance.yahoo.com"]
 _UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 
@@ -49,22 +49,28 @@ def parse_yahoo_chart(payload: dict) -> list[Candle]:
     return candles
 
 
-def fetch_yahoo(symbol: str = "SPY", range_: str = "max", retries: int = 4) -> list[Candle]:
-    url = f"{_URL}{symbol.upper()}?range={range_}&interval=1d"
-    req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
+def fetch_yahoo(symbol: str = "SPY", range_: str = "max", retries: int = 5) -> list[Candle]:
+    """Fetch daily OHLC, rotating Yahoo hosts and backing off on 429 throttling."""
+    suffix = f"/v8/finance/chart/{symbol.upper()}?range={range_}&interval=1d"
+    last_exc: Exception | None = None
     for attempt in range(retries):
+        host = _HOSTS[attempt % len(_HOSTS)]
+        req = urllib.request.Request(host + suffix,
+                                     headers={"User-Agent": _UA, "Accept": "application/json"})
         try:
             with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as resp:  # noqa: S310
-                payload = json.loads(resp.read().decode())
-            break
+                candles = parse_yahoo_chart(json.loads(resp.read().decode()))
+            if candles:
+                return candles
+            logger.warning("yahoo: 0 candles for %s (bad symbol or empty response?)", symbol)
+            return candles
         except urllib.error.HTTPError as exc:
-            if exc.code == 429 and attempt < retries - 1:
-                wait = 5 * (2 ** attempt)  # 5s, 10s, 20s — Yahoo throttles bursts
-                logger.warning("yahoo: 429 for %s, retrying in %ds", symbol, wait)
+            last_exc = exc
+            if exc.code in (429, 401, 403) and attempt < retries - 1:
+                wait = 5 * (2 ** attempt)  # 5,10,20,40s — Yahoo throttles bursts
+                logger.warning("yahoo: HTTP %d for %s, retry %d/%d in %ds (host rotates)",
+                               exc.code, symbol, attempt + 1, retries, wait)
                 time.sleep(wait)
                 continue
             raise
-    candles = parse_yahoo_chart(payload)
-    if not candles:
-        logger.warning("yahoo: 0 candles for %s (blocked or bad symbol?)", symbol)
-    return candles
+    raise last_exc  # type: ignore[misc]

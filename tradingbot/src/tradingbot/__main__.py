@@ -285,6 +285,11 @@ def _walkforward(settings: Settings, args) -> int:
             logger.error("--csv PATH is required with --source csv")
             return 2
         candles = load_csv(args.csv)
+        if len(candles) < 50:
+            logger.error("%s has only %d bars — the fetch almost certainly failed (stale/empty "
+                         "file). Re-fetch and check it logged 'Saved N…' with N in the thousands.",
+                         args.csv, len(candles))
+            return 2
         data_note = f"CSV {args.csv} ({len(candles)} bars)"
     else:
         candles = synthetic_candles(n=args.bars, seed=args.seed)
@@ -423,6 +428,11 @@ def _compare(settings: Settings, args) -> int:
             logger.error("--csv PATH is required with --source csv")
             return 2
         candles = load_csv(args.csv)
+        if len(candles) < 50:
+            logger.error("%s has only %d bars — the fetch almost certainly failed (stale/empty "
+                         "file). Re-fetch and check it logged 'Saved N…' with N in the thousands.",
+                         args.csv, len(candles))
+            return 2
         data_note = f"CSV {args.csv} ({len(candles)} bars)"
     else:
         candles = synthetic_candles(n=args.bars, seed=args.seed)
