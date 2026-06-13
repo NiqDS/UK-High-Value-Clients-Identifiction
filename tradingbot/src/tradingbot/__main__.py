@@ -452,7 +452,7 @@ def main() -> int:
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
     # backtest options
-    parser.add_argument("--source", choices=["synthetic", "exchange"], default="synthetic")
+    parser.add_argument("--source", choices=["synthetic", "exchange", "csv"], default="synthetic")
     parser.add_argument("--bars", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--equity", type=float, default=10_000.0)
