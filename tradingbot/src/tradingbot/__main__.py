@@ -170,9 +170,14 @@ def _fetch_data(settings: Settings, args) -> int:
 
     cfg = settings.config
     symbol = args.symbol or cfg.exchange.symbols_allowlist[0]
+    # data fetch is read-only public history: force the live endpoint, and allow
+    # overriding the venue (e.g. fetch from a deep-history exchange for training).
+    ex_cfg = cfg.exchange.model_copy(update={"sandbox": False})
+    if args.exchange:
+        ex_cfg = ex_cfg.model_copy(update={"name": args.exchange})
 
     async def _go() -> int:
-        adapter = build_adapter(cfg.exchange, settings.secrets)
+        adapter = build_adapter(ex_cfg, settings.secrets)
         try:
             await adapter.load_markets()
             client = adapter._client  # for parse_timeframe / pagination
@@ -185,9 +190,11 @@ def _fetch_data(settings: Settings, args) -> int:
                 if not batch:
                     break
                 all_candles += batch
-                since = batch[-1].timestamp + step_ms
-                if len(batch) < 1000:
+                last = batch[-1].timestamp
+                if last + step_ms <= since:  # exchange made no forward progress -> stop
                     break
+                since = last + step_ms
+            logger.info("Fetched %d candles from %s", len(all_candles), ex_cfg.name)
             save_csv(args.out, all_candles)
             logger.info("Saved %d candles to %s", len(all_candles), args.out)
             return 0
@@ -454,6 +461,8 @@ def main() -> int:
     parser.add_argument("--oos", type=float, default=0.30, help="out-of-sample fraction")
     parser.add_argument("--report", default=None, help="write the report to this path")
     # fetch-data options
+    parser.add_argument("--exchange", default=None,
+                        help="override the venue for fetch-data (e.g. kraken, binance, kucoin)")
     parser.add_argument("--symbol", default=None, help="symbol for fetch-data")
     parser.add_argument("--timeframe", default="1h", help="OHLCV timeframe for fetch-data")
     parser.add_argument("--months", type=int, default=12, help="months of history to fetch")
