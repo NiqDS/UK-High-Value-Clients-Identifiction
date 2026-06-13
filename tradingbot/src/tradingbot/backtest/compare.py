@@ -127,6 +127,38 @@ def score_experiment(candles, exp: Experiment, bt_config: BacktestConfig, metric
     )
 
 
+def cross_asset_report(
+    assets: list[tuple[str, list, float]],  # (label, candles, fee_pct)
+    base: StrategyConfig, oos_ratio: float, slippage_pct: float, metric: Metric,
+) -> str:
+    """Run the SAME baseline + mean-reversion strategies on each asset and tabulate
+    how each behaves — the cross-asset view (does the thesis fit equities vs crypto?)."""
+    lines = [
+        "# Cross-asset comparison (out-of-sample)",
+        f"metric: net-of-fees return / max drawdown | OOS fraction: {oos_ratio:.0%}",
+        "",
+        "asset      | bars  | fee%  | baseline net% / score   | reversion net% / score  | reversion wins?",
+    ]
+    rows = []
+    for label, candles, fee in assets:
+        bt = BacktestConfig(fee_pct=fee, slippage_pct=slippage_pct, oos_ratio=oos_ratio)
+        exps = default_experiments(base)
+        by = {s.name: s for s in (score_experiment(candles, e, bt, metric) for e in exps)}
+        b, r = by.get(BASELINE), by.get("H2_vwap_reversion")
+        wins = "YES" if (r and b and r.score > b.score and r.net_pct > 0) else "no"
+        rows.append((label, len(candles), fee, b, r, wins))
+        lines.append(
+            f"{label:10s} | {len(candles):5d} | {fee:4.2f}  | "
+            f"{(b.net_pct if b else 0):+6.2f} / {(b.score if b else 0):+6.3f} ({b.trades if b else 0:3d}t) | "
+            f"{(r.net_pct if r else 0):+6.2f} / {(r.score if r else 0):+6.3f} ({r.trades if r else 0:3d}t) | {wins}"
+        )
+    lines += ["", "### Read",
+              "- 'reversion wins?' = mean-reversion beats the directional baseline AND is net-positive OOS.",
+              "- The thesis (volatility/mean-reversion) is expected to fit mean-reverting, lower-vol "
+              "assets (equity indices) and fail on trending, high-vol ones (crypto)."]
+    return "\n".join(lines)
+
+
 def run_comparison(
     candles, experiments: list[Experiment], bt_config: BacktestConfig, metric: Metric,
 ) -> tuple[list[ExpScore], str]:

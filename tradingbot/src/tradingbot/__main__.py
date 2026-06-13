@@ -411,6 +411,44 @@ def _fetch_funding(settings: Settings, args) -> int:
     return 0
 
 
+def _cross_asset(settings: Settings, args) -> int:
+    from pathlib import Path
+
+    from .backtest.compare import cross_asset_report
+    from .backtest.data import load_csv
+    from .backtest.metrics import METRICS
+
+    if not args.asset:
+        logger.error("pass one or more --asset LABEL=path.csv[@fee]  "
+                     "(e.g. --asset BTC=data/btc_1d_long.csv@0.6 --asset SPY=data/spy.csv@0.01)")
+        return 2
+    assets = []
+    for spec in args.asset:
+        try:
+            label, rest = spec.split("=", 1)
+            path, _, fee = rest.partition("@")
+            fee_pct = float(fee) if fee else args.fee
+        except ValueError:
+            logger.error("bad --asset spec %r (want LABEL=path.csv[@fee])", spec)
+            return 2
+        if not Path(path).exists():
+            logger.error("asset CSV not found: %s", path)
+            return 2
+        candles = load_csv(path)
+        if len(candles) < 50:
+            logger.error("%s has only %d bars — fetch likely failed", path, len(candles))
+            return 2
+        assets.append((label, candles, fee_pct))
+    report = cross_asset_report(assets, settings.config.strategy, args.oos,
+                                args.slippage, METRICS[args.metric])
+    print(report)
+    if args.report:
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote cross-asset report to %s", args.report)
+    return 0
+
+
 def _fetch_onchain(settings: Settings, args) -> int:
     from .exchange.onchain import fetch_mvrv_bgeometrics, save_mvrv_csv
 
@@ -693,7 +731,7 @@ def main() -> int:
         "command",
         choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
-                 "regime", "fetch-funding", "fetch-onchain"],
+                 "regime", "fetch-funding", "fetch-onchain", "cross-asset"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -731,6 +769,8 @@ def main() -> int:
     parser.add_argument("--mvrv-gate", action="store_true",
                         help="hard-skip long entries when MVRV Z is rich (vs only resizing)")
     parser.add_argument("--start", default=None, help="fetch-onchain start date (YYYY-MM-DD)")
+    parser.add_argument("--asset", action="append", default=[],
+                        help="cross-asset entry LABEL=path.csv[@fee] (repeatable)")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)
@@ -766,6 +806,8 @@ def main() -> int:
         return _fetch_funding(settings, args)
     if args.command == "fetch-onchain":
         return _fetch_onchain(settings, args)
+    if args.command == "cross-asset":
+        return _cross_asset(settings, args)
     return 2  # pragma: no cover
 
 
