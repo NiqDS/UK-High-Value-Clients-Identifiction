@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 import logging
+import time
+import urllib.error
 import urllib.request
 
 from .coingecko import _ssl_context
@@ -47,11 +49,21 @@ def parse_yahoo_chart(payload: dict) -> list[Candle]:
     return candles
 
 
-def fetch_yahoo(symbol: str = "SPY", range_: str = "max") -> list[Candle]:
+def fetch_yahoo(symbol: str = "SPY", range_: str = "max", retries: int = 4) -> list[Candle]:
     url = f"{_URL}{symbol.upper()}?range={range_}&interval=1d"
     req = urllib.request.Request(url, headers={"User-Agent": _UA, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as resp:  # noqa: S310
-        payload = json.loads(resp.read().decode())
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(req, timeout=60, context=_ssl_context()) as resp:  # noqa: S310
+                payload = json.loads(resp.read().decode())
+            break
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429 and attempt < retries - 1:
+                wait = 5 * (2 ** attempt)  # 5s, 10s, 20s — Yahoo throttles bursts
+                logger.warning("yahoo: 429 for %s, retrying in %ds", symbol, wait)
+                time.sleep(wait)
+                continue
+            raise
     candles = parse_yahoo_chart(payload)
     if not candles:
         logger.warning("yahoo: 0 candles for %s (blocked or bad symbol?)", symbol)
