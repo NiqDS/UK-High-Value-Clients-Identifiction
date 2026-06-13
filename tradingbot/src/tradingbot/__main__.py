@@ -193,6 +193,18 @@ def _fetch_data(settings: Settings, args) -> int:
                     len(candles), args.timeframe, args.out)
         return 0
 
+    # Stooq: free daily OHLC for stocks / ETFs / bonds (no key, plain HTTPS).
+    # e.g. --exchange stooq --symbol spy.us  (equities), tlt.us / agg.us (bonds).
+    if (args.exchange or "").lower() == "stooq":
+        from .backtest.data import save_csv
+        from .exchange.stooq import fetch_stooq
+
+        candles = fetch_stooq(symbol or "spy.us")
+        save_csv(args.out, candles)
+        logger.info("Saved %d daily candles from Stooq (%s) to %s",
+                    len(candles), symbol or "spy.us", args.out)
+        return 0
+
     # data fetch is read-only public history: force the live endpoint, and allow
     # overriding the venue (e.g. fetch from a deep-history exchange for training).
     ex_cfg = cfg.exchange.model_copy(update={"sandbox": False})
@@ -350,8 +362,19 @@ def _fetch_funding(settings: Settings, args) -> int:
     return 0
 
 
+def _fetch_onchain(settings: Settings, args) -> int:
+    from .exchange.onchain import fetch_mvrv_coinmetrics, save_mvrv_csv
+
+    points = fetch_mvrv_coinmetrics(start=args.start or "2011-01-01")
+    save_mvrv_csv(args.out, points)
+    logger.info("Saved %d MVRV Z-score rows to %s", len(points), args.out)
+    return 0
+
+
 def _compare(settings: Settings, args) -> int:
-    from .backtest.compare import default_experiments, funding_experiments, run_comparison
+    from .backtest.compare import (
+        default_experiments, funding_experiments, mvrv_experiments, run_comparison,
+    )
     from .backtest.data import load_csv
     from .backtest.engine import BacktestConfig
     from .backtest.metrics import METRICS
@@ -381,6 +404,15 @@ def _compare(settings: Settings, args) -> int:
         gate = args.funding_gate or cfg.funding.gate_longs_when_crowded
         experiments += funding_experiments(cfg.strategy, series, overlay, gate)
         data_note += f" + funding {args.funding_csv} ({len(series.rates)} rows)"
+    if args.mvrv_csv:
+        from .exchange.onchain import load_mvrv_csv
+        from .strategy.onchain import MvrvOverlay, MvrvSeries
+
+        mseries = MvrvSeries(load_mvrv_csv(args.mvrv_csv))
+        moverlay = MvrvOverlay(cfg.mvrv)
+        mgate = args.mvrv_gate or cfg.mvrv.gate_when_rich
+        experiments += mvrv_experiments(cfg.strategy, mseries, moverlay, mgate)
+        data_note += f" + mvrv {args.mvrv_csv} ({len(mseries.points)} rows)"
     _, table = run_comparison(candles, experiments, bt_cfg, metric)
     report = f"# Strategy comparison — {data_note}\n- fees {bt_cfg.fee_pct}%/side, " \
              f"slippage {bt_cfg.slippage_pct}%/fill\n\n{table}\n"
@@ -590,7 +622,7 @@ def main() -> int:
         "command",
         choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
-                 "regime", "fetch-funding"],
+                 "regime", "fetch-funding", "fetch-onchain"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -623,6 +655,11 @@ def main() -> int:
                         help="funding-rate CSV to add funding-overlay variants to compare")
     parser.add_argument("--funding-gate", action="store_true",
                         help="hard-skip long entries when funding is crowded (vs only resizing)")
+    parser.add_argument("--mvrv-csv", default=None,
+                        help="MVRV Z-score CSV to add on-chain-overlay variants to compare")
+    parser.add_argument("--mvrv-gate", action="store_true",
+                        help="hard-skip long entries when MVRV Z is rich (vs only resizing)")
+    parser.add_argument("--start", default=None, help="fetch-onchain start date (YYYY-MM-DD)")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)
@@ -656,6 +693,8 @@ def main() -> int:
         return _regime(settings, args)
     if args.command == "fetch-funding":
         return _fetch_funding(settings, args)
+    if args.command == "fetch-onchain":
+        return _fetch_onchain(settings, args)
     return 2  # pragma: no cover
 
 

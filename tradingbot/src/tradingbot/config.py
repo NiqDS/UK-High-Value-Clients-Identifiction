@@ -210,6 +210,31 @@ class FundingConfig(BaseModel):
         return self
 
 
+class MvrvConfig(BaseModel):
+    """On-chain MVRV Z-score valuation overlay (slow; multi-year cycle signal).
+
+    Low Z (historically <0) = undervalued/accumulation => favorable; high Z
+    (historically >7) = euphoria/overvalued => scale down / gate. Scales size,
+    never direction. NOTE: this is a *cycle* metric — evaluate it on multi-year
+    DAILY data; a one-year hourly backtest barely moves it.
+    """
+
+    enabled: bool = False
+    low_z: float = 0.0      # at/below this Z => fully favorable
+    high_z: float = 7.0     # at/above this Z => fully unfavorable
+    min_mult: float = Field(default=0.25, ge=0.0, le=1.0)
+    max_mult: float = Field(default=1.0, ge=0.0, le=1.0)
+    gate_when_rich: bool = False  # hard-skip new longs when Z >= high_z
+
+    @model_validator(mode="after")
+    def _check(self) -> "MvrvConfig":
+        if self.low_z >= self.high_z:
+            raise ValueError("mvrv.low_z must be < high_z")
+        if self.min_mult > self.max_mult:
+            raise ValueError("mvrv.min_mult must be <= max_mult")
+        return self
+
+
 class TelegramConfig(BaseModel):
     enabled: bool = True
     approval_threshold_quote: float = Field(default=0.0, ge=0.0)
@@ -254,6 +279,7 @@ class Config(BaseModel):
     kill_switch: KillSwitchConfig = Field(default_factory=KillSwitchConfig)
     regime: RegimeConfig = Field(default_factory=RegimeConfig)
     funding: FundingConfig = Field(default_factory=FundingConfig)
+    mvrv: MvrvConfig = Field(default_factory=MvrvConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     reporting: ReportingConfig = Field(default_factory=ReportingConfig)
     app: AppConfig = Field(default_factory=AppConfig)

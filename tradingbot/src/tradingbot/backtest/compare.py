@@ -98,6 +98,26 @@ def funding_experiments(base: StrategyConfig, series, overlay, gate: bool) -> li
     ]
 
 
+def mvrv_experiments(base: StrategyConfig, series, overlay, gate: bool) -> list[Experiment]:
+    """Wrap baseline + reversion with the MVRV Z-score valuation overlay."""
+    from ..strategy.onchain import MvrvFilteredStrategy
+
+    def c(**kw) -> StrategyConfig:
+        return base.model_copy(update=kw)
+
+    return [
+        Experiment(
+            "baseline+mvrv",
+            lambda: MvrvFilteredStrategy(
+                SmaCrossoverStrategy(c(vwap_filter_enabled=False)), series, overlay, gate),
+            "mvrv_overlay", single=False),
+        Experiment(
+            "reversion+mvrv",
+            lambda: MvrvFilteredStrategy(VwapReversionStrategy(c()), series, overlay, gate),
+            "mvrv+reversion", single=False),
+    ]
+
+
 def score_experiment(candles, exp: Experiment, bt_config: BacktestConfig, metric: Metric) -> ExpScore:
     oos = Backtester(bt_config).run_oos(candles, exp.factory)[1]
     return ExpScore(

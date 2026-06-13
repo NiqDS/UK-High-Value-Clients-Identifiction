@@ -120,6 +120,15 @@ funding:
   max_mult: 1.0                     # full size when funding is favorable (negative)
   gate_longs_when_crowded: false    # hard-skip new longs when funding is extreme
 
+# --- On-chain MVRV Z-score valuation overlay (slow; multi-year cycle metric) -
+mvrv:
+  enabled: false                    # scales long size by on-chain valuation; NOT a direction call
+  low_z: 0.0                        # at/below this Z = undervalued -> full size
+  high_z: 7.0                       # at/above this Z = euphoria -> smallest size
+  min_mult: 0.25
+  max_mult: 1.0
+  gate_when_rich: false             # hard-skip new longs when Z >= high_z
+
 # --- Telegram approval + control. Locked to allowlisted chat IDs. ----------
 telegram:
   enabled: true
