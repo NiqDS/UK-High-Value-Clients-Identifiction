@@ -378,8 +378,8 @@ def _compare(settings: Settings, args) -> int:
 
         series = FundingSeries(load_funding_csv(args.funding_csv))
         overlay = FundingOverlay(cfg.funding)
-        experiments += funding_experiments(
-            cfg.strategy, series, overlay, cfg.funding.gate_longs_when_crowded)
+        gate = args.funding_gate or cfg.funding.gate_longs_when_crowded
+        experiments += funding_experiments(cfg.strategy, series, overlay, gate)
         data_note += f" + funding {args.funding_csv} ({len(series.rates)} rows)"
     _, table = run_comparison(candles, experiments, bt_cfg, metric)
     report = f"# Strategy comparison — {data_note}\n- fees {bt_cfg.fee_pct}%/side, " \
@@ -621,6 +621,8 @@ def main() -> int:
     parser.add_argument("--events-csv", default=None, help="extra events CSV (date,label,kind)")
     parser.add_argument("--funding-csv", default=None,
                         help="funding-rate CSV to add funding-overlay variants to compare")
+    parser.add_argument("--funding-gate", action="store_true",
+                        help="hard-skip long entries when funding is crowded (vs only resizing)")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)
