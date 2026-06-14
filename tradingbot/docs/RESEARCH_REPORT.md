@@ -275,17 +275,47 @@ basket:
 The key payoff is visible in one line of the report: the **index drawdown is far
 lower than the average single-coin drawdown**, because pooling N convex, thin
 trend streams diversifies the outlier dependence — when one coin's big trend
-trade misses, another's lands. Run it:
+trade misses, another's lands. Run it (0.6%/side = the conservative real-life
+taker cost; full-deployment sizing pays it on the whole sleeve each round trip):
 ```
 python3 -m tradingbot portfolio \
   --asset BTC=data/btc_1d_long.csv  --asset ETH=data/eth_1d_long.csv \
   --asset BNB=data/bnb_1d_long.csv  --asset ADA=data/ada_1d_long.csv \
   --asset AVAX=data/avax_1d_long.csv --asset DOGE=data/doge_1d_long.csv \
   --asset TRX=data/trx_1d_long.csv \
-  --equity 70000 --fee 0.1 --slippage 0.05 \
+  --equity 70000 --fee 0.6 --slippage 0.05 \
   --weight-mode equal --report reports/trend_index.md
 # swap --weight-mode invvol for a risk-parity-style index (calmer coins weighted up)
 ```
+
+**Result (equal-weight, 1986 common daily bars, 2020-09-22 → 2026-05-31):**
+
+| coin | alloc% | net% | contrib% | final% | maxdd% | trades |
+|---|---|---|---|---|---|---|
+| BNB | 14.3 | +1394 | +29.4 | 27.4 | 37.8 | 15 |
+| ADA | 14.3 | +993 | +20.9 | 20.1 | 50.4 | 11 |
+| DOGE | 14.3 | +953 | +20.1 | 19.3 | 57.7 | 17 |
+| AVAX | 14.3 | +631 | +13.3 | 13.4 | 58.7 | 14 |
+| ETH | 14.3 | +467 | +9.8 | 10.4 | 45.5 | 16 |
+| BTC | 14.3 | +210 | +4.4 | 5.7 | 34.4 | 17 |
+| TRX | 14.3 | +98 | +2.1 | 3.6 | 66.8 | 18 |
+| **INDEX** | **100** | **+678** | **100** | **100** | **37.0** | **108** |
+
+*(Numbers above are at the earlier 0.1% fee; re-run at 0.6% for the conservative
+figure — it trims the totals by tens of % but does not flip the winners, since
+the returns are hundreds of %.)*
+
+**What it shows — and what to discount.** Diversification is real: index drawdown
+**37% vs 50% average single-coin**, with no coin dominating P&L (BNB top at 29%,
+TRX bottom at 2%) — the basket isn't a one-coin bet. **But the headline +678% is
+not a forecast:** (1) the window spans crypto's two largest bull runs (2020–21,
+2023–24) — trend-following's best-case regime; (2) the constituents are the
+*survivors* (today's top majors) — a real-time system would also have bought the
+uptrends of coins that later died (LUNA, FTT), so the live capture is lower; and
+(3) there is no OOS hold-out here (full history; defensible only because Donchian
+50/15 is fixed, not fitted). And 37% drawdown is still a hard ride. Treat this as
+"trend-following worked in the bull regime and the basket smoothed it," not as an
+expected return.
 Note: each sleeve deploys its *full* allocation on a long (target notional =
 sleeve), unlike the tiny fixed notional in the single-coin `compare`/`robustness`
 runs — so the index net% reflects real capital at work, not the 0.4%-sized
@@ -451,5 +481,5 @@ python3 -m tradingbot regime      --csv data/btc_1d_long.csv
 python3 -m tradingbot portfolio --asset BTC=data/btc_1d_long.csv --asset ETH=data/eth_1d_long.csv \
     --asset BNB=data/bnb_1d_long.csv --asset ADA=data/ada_1d_long.csv --asset AVAX=data/avax_1d_long.csv \
     --asset DOGE=data/doge_1d_long.csv --asset TRX=data/trx_1d_long.csv \
-    --equity 70000 --fee 0.1 --slippage 0.05 --weight-mode equal
+    --equity 70000 --fee 0.6 --slippage 0.05 --weight-mode equal
 ```
