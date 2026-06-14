@@ -49,6 +49,8 @@ class SleeveResult:
     maxdd_pct: float
     contrib_weight: float    # share of the basket's TOTAL net P&L
     final_weight: float      # share of the ending bundle value
+    exposure_pct: float      # % of bars the sleeve was actually long (vs in cash)
+    buyhold_pct: float       # passive buy-and-hold return over the same window
 
 
 @dataclass
@@ -66,7 +68,31 @@ class PortfolioResult:
     fee_pct: float           # cost model the run used (echoed so a report is self-documenting)
     slippage_pct: float
     avg_sleeve_maxdd: float  # mean per-coin drawdown — the diversification benchmark
+    exposure_pct: float      # capital-weighted time-in-market across the basket
+    buyhold_pct: float       # weighted buy-and-hold return (the "just hold" benchmark)
+    buyhold_maxdd_pct: float # drawdown of holding the basket passively (what trend dodged)
     equity_curve: list[float] = field(default_factory=list)
+
+
+def slice_by_date(candles: list[Candle], start_ms: int | None, end_ms: int | None) -> list[Candle]:
+    """Keep candles with start_ms <= ts <= end_ms (either bound optional)."""
+    return [
+        c for c in candles
+        if (start_ms is None or c.timestamp >= start_ms)
+        and (end_ms is None or c.timestamp <= end_ms)
+    ]
+
+
+def _exposure_pct(trades, timestamps: list[int]) -> float:
+    """Fraction of bars (%) spent holding a position — derived from each trade's
+    [entry_ts, exit_ts] span. Low exposure in a bear = correctly stood aside."""
+    if not timestamps:
+        return 0.0
+    in_market = 0
+    for ts in timestamps:
+        if any(t.entry_ts <= ts <= t.exit_ts for t in trades):
+            in_market += 1
+    return in_market / len(timestamps) * 100.0
 
 
 def align_on_common_timestamps(
@@ -145,7 +171,8 @@ def portfolio_backtest(
     total_initial = bt.initial_equity
 
     sleeve_curves: list[list[float]] = []
-    raw: list[tuple[str, float, "object"]] = []  # (label, alloc, result)
+    buyhold_curves: list[list[float]] = []
+    raw: list[tuple[str, float, "object", float, float]] = []  # (label, alloc, res, exp, bh)
     for label, candles in aligned.items():
         alloc = total_initial * w.get(label, 0.0)
         # full-deployment sizing: a long uses the whole sleeve
@@ -155,23 +182,32 @@ def portfolio_backtest(
         )
         res = Backtester(sbt).run(candles, DonchianBreakoutStrategy(scfg), symbol=label)
         sleeve_curves.append(res.equity_curve)
-        raw.append((label, alloc, res))
+        exp = _exposure_pct(res.trades, [c.timestamp for c in candles])
+        # passive buy-and-hold of the same allocation over the same window
+        first, last = candles[0].close, candles[-1].close
+        bh_pct = (last / first - 1.0) * 100.0 if first > 0 else 0.0
+        buyhold_curves.append([alloc * (c.close / first) if first > 0 else alloc for c in candles])
+        raw.append((label, alloc, res, exp, bh_pct))
 
     # combine aligned per-bar equity into one portfolio curve
     n_bars = min(len(c) for c in sleeve_curves)
     portfolio_curve = [
         sum(curve[i] for curve in sleeve_curves) for i in range(n_bars)
     ]
+    bh_curve = [sum(curve[i] for curve in buyhold_curves) for i in range(n_bars)]
     final = portfolio_curve[-1] if portfolio_curve else total_initial
     total_net_pnl = final - total_initial
+    bh_final = bh_curve[-1] if bh_curve else total_initial
 
     sleeves: list[SleeveResult] = []
     total_trades = 0
     maxdds: list[float] = []
-    for label, alloc, res in raw:
+    exp_weighted = 0.0
+    for label, alloc, res, exp, bh_pct in raw:
         net_pnl = res.final_equity - alloc
         total_trades += res.num_trades
         maxdds.append(res.max_drawdown_pct)
+        exp_weighted += exp * (alloc / total_initial if total_initial else 0.0)
         sleeves.append(SleeveResult(
             label=label, alloc_weight=alloc / total_initial if total_initial else 0.0,
             initial=alloc, final=res.final_equity,
@@ -179,6 +215,7 @@ def portfolio_backtest(
             maxdd_pct=res.max_drawdown_pct,
             contrib_weight=(net_pnl / total_net_pnl) if abs(total_net_pnl) > 1e-9 else 0.0,
             final_weight=(res.final_equity / final) if final else 0.0,
+            exposure_pct=exp, buyhold_pct=bh_pct,
         ))
 
     sleeves.sort(key=lambda s: s.net_pnl, reverse=True)
@@ -189,6 +226,9 @@ def portfolio_backtest(
         bars=n_bars, start_ts=timestamps[0], end_ts=timestamps[-1],
         weight_mode=weight_mode, fee_pct=bt.fee_pct, slippage_pct=bt.slippage_pct,
         avg_sleeve_maxdd=sum(maxdds) / len(maxdds) if maxdds else 0.0,
+        exposure_pct=exp_weighted,
+        buyhold_pct=(bh_final / total_initial - 1.0) * 100.0 if total_initial else 0.0,
+        buyhold_maxdd_pct=_max_drawdown_pct(bh_curve),
         equity_curve=portfolio_curve,
     )
 
@@ -209,28 +249,36 @@ def portfolio_report(result: PortfolioResult, label: str = "") -> str:
         f"fees {r.fee_pct}%/side, slippage {r.slippage_pct}%/fill | "
         "each sleeve runs Donchian breakout, fully deployed when long, cash otherwise",
         "",
-        "coin   | alloc% | net%   | P&L     | contrib% | final% | maxdd% | trades",
+        "coin   | alloc% | net%   | buy&hold% | expo% | maxdd% | trades",
     ]
     for s in r.sleeves:
         lines.append(
             f"{s.label:6s} | {s.alloc_weight * 100:5.1f}  | {s.net_pct:+6.2f} | "
-            f"{s.net_pnl:+8.0f} | {s.contrib_weight * 100:+7.1f}  | "
-            f"{s.final_weight * 100:5.1f}  | {s.maxdd_pct:5.1f}  | {s.trades:4d}"
+            f"{s.buyhold_pct:+8.1f}  | {s.exposure_pct:4.0f}  | "
+            f"{s.maxdd_pct:5.1f}  | {s.trades:4d}"
         )
+    # capital-preservation framing: trend vs just holding the basket
+    dodged = r.buyhold_maxdd_pct - r.maxdd_pct
+    beat_bh = r.net_pct - r.buyhold_pct
     lines += [
         "",
-        f"INDEX  | 100.0  | {r.net_pct:+6.2f} | {r.final - r.initial:+8.0f} | "
-        f"  100.0  | 100.0  | {r.maxdd_pct:5.1f}  | {r.trades:4d}",
+        f"INDEX  | 100.0  | {r.net_pct:+6.2f} | {r.buyhold_pct:+8.1f}  | "
+        f"{r.exposure_pct:4.0f}  | {r.maxdd_pct:5.1f}  | {r.trades:4d}",
         "",
         "### Read",
-        f"- Index net return: **{r.net_pct:+.2f}%** "
-        f"({r.initial:.0f} → {r.final:.0f}), max drawdown {r.maxdd_pct:.1f}%.",
+        f"- Trend index: **{r.net_pct:+.2f}%** ({r.initial:.0f} → {r.final:.0f}), "
+        f"max drawdown {r.maxdd_pct:.1f}%, time-in-market **{r.exposure_pct:.0f}%**.",
+        f"- Buy-and-hold the same basket: **{r.buyhold_pct:+.2f}%**, "
+        f"max drawdown {r.buyhold_maxdd_pct:.1f}%.",
+        f"- Capital preservation: trend {'BEAT' if beat_bh > 0 else 'TRAILED'} buy-and-hold by "
+        f"**{beat_bh:+.1f} pts** of return while {'cutting' if dodged > 0 else 'adding'} "
+        f"**{abs(dodged):.1f} pts** of drawdown "
+        f"(held only {r.exposure_pct:.0f}% of the time — the rest in cash).",
         f"- Diversification: index drawdown {r.maxdd_pct:.1f}% vs average single-coin "
         f"{r.avg_sleeve_maxdd:.1f}% "
-        f"(**{dd_delta:+.1f} pts** {'lower — basket smooths the ride' if dd_delta > 0 else 'higher'}).",
-        "- `alloc%` = capital weight in; `contrib%` = share of the basket's net P&L "
-        "(who drove it); `final%` = share of the ending bundle.",
-        "- Trend P&L is convex and thin per coin — the index pools those few fat "
-        "winners across coins so the aggregate is steadier than any one sleeve.",
+        f"(**{dd_delta:+.1f} pts** {'lower' if dd_delta > 0 else 'higher'}).",
+        "- `expo%` = % of bars actually long (low in a bear = it sold and sat in cash). "
+        "Donchian is long-only: it can't short the downtrend, so 'spotting the bear' "
+        "shows up as an early channel exit + low exposure, NOT a short profit.",
     ]
     return "\n".join(lines)

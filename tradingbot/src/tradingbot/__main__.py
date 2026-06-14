@@ -537,9 +537,11 @@ def _fetch_onchain(settings: Settings, args) -> int:
 def _portfolio(settings: Settings, args) -> int:
     from pathlib import Path
 
+    import datetime as _dt
+
     from .backtest.data import load_csv
     from .backtest.engine import BacktestConfig
-    from .backtest.portfolio import portfolio_backtest, portfolio_report
+    from .backtest.portfolio import portfolio_backtest, portfolio_report, slice_by_date
 
     if not args.asset:
         logger.error("pass one or more --asset LABEL=path.csv  "
@@ -548,6 +550,22 @@ def _portfolio(settings: Settings, args) -> int:
     if args.weight_mode not in ("equal", "invvol"):
         logger.error("--weight-mode must be 'equal' or 'invvol'")
         return 2
+
+    def _to_ms(s):
+        if not s:
+            return None
+        try:
+            d = _dt.datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=_dt.timezone.utc)
+        except ValueError:
+            logger.error("bad date %r — use YYYY-MM-DD", s)
+            raise
+        return int(d.timestamp() * 1000)
+
+    try:
+        start_ms, end_ms = _to_ms(args.start), _to_ms(args.end)
+    except ValueError:
+        return 2
+
     assets = []
     for spec in args.asset:
         # accept the same LABEL=path[@fee] spec as cross-asset; the @fee is ignored
@@ -564,6 +582,12 @@ def _portfolio(settings: Settings, args) -> int:
         if len(candles) < 50:
             logger.error("%s has only %d bars — fetch likely failed", path, len(candles))
             return 2
+        if start_ms or end_ms:
+            candles = slice_by_date(candles, start_ms, end_ms)
+            if len(candles) < 60:
+                logger.error("%s has only %d bars inside the date window — widen --start/--end "
+                             "(Donchian needs > entry_period+1 bars to trade)", path, len(candles))
+                return 2
         assets.append((label, candles))
     bt = BacktestConfig(initial_equity=args.equity, fee_pct=args.fee, slippage_pct=args.slippage)
     try:
@@ -887,7 +911,10 @@ def main() -> int:
                         help="MVRV Z-score CSV to add on-chain-overlay variants to compare")
     parser.add_argument("--mvrv-gate", action="store_true",
                         help="hard-skip long entries when MVRV Z is rich (vs only resizing)")
-    parser.add_argument("--start", default=None, help="fetch-onchain start date (YYYY-MM-DD)")
+    parser.add_argument("--start", default=None,
+                        help="start date YYYY-MM-DD (fetch-onchain; portfolio window filter)")
+    parser.add_argument("--end", default=None,
+                        help="end date YYYY-MM-DD (portfolio window filter, e.g. isolate a bear)")
     parser.add_argument("--asset", action="append", default=[],
                         help="cross-asset entry LABEL=path.csv[@fee] (repeatable)")
     parser.add_argument("--segments", type=int, default=5,

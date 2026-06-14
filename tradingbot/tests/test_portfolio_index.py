@@ -9,6 +9,7 @@ import pytest
 from tradingbot.backtest.engine import BacktestConfig
 from tradingbot.backtest.portfolio import (
     align_on_common_timestamps, compute_weights, portfolio_backtest, portfolio_report,
+    slice_by_date,
 )
 from tradingbot.backtest.synthetic import synthetic_candles
 from tradingbot.config import StrategyConfig
@@ -86,8 +87,9 @@ def test_report_renders_index_row_and_weights() -> None:
     report = portfolio_report(res, label="3 coins")
     assert "Trend index backtest" in report
     assert "INDEX" in report
-    assert "alloc%" in report and "contrib%" in report and "final%" in report
+    assert "alloc%" in report and "buy&hold%" in report and "expo%" in report
     assert "Diversification" in report
+    assert "Capital preservation" in report
     # the report self-documents the cost model it ran with
     assert "fees 0.1%/side" in report
 
@@ -103,6 +105,43 @@ def test_fee_changes_result() -> None:
         assets, base, BacktestConfig(initial_equity=9_000.0, fee_pct=0.6, slippage_pct=0.05))
     assert hi.net_pct < lo.net_pct
     assert hi.fee_pct == 0.6 and lo.fee_pct == 0.1
+
+
+def test_slice_by_date_keeps_window() -> None:
+    candles = synthetic_candles(n=200, seed=1)
+    lo, hi = candles[50].timestamp, candles[120].timestamp
+    sliced = slice_by_date(candles, lo, hi)
+    assert sliced[0].timestamp == lo and sliced[-1].timestamp == hi
+    assert len(sliced) == 71  # inclusive both ends
+    # open-ended bounds
+    assert len(slice_by_date(candles, lo, None)) == 150
+    assert len(slice_by_date(candles, None, hi)) == 121
+
+
+def test_exposure_and_buyhold_present() -> None:
+    base = StrategyConfig(donchian_entry_period=20, donchian_exit_period=10)
+    bt = BacktestConfig(initial_equity=9_000.0, fee_pct=0.6, slippage_pct=0.05)
+    res = portfolio_backtest(_assets(), base, bt)
+    # exposure is a sane fraction; basket exposure is the weighted mean of sleeves
+    for s in res.sleeves:
+        assert 0.0 <= s.exposure_pct <= 100.0
+    assert 0.0 <= res.exposure_pct <= 100.0
+    # buy-and-hold of an upward-drifting series is positive
+    assert res.buyhold_pct > 0.0
+    assert res.buyhold_maxdd_pct >= 0.0
+
+
+def test_bear_window_low_exposure_preserves_capital() -> None:
+    # a steady downtrend: long-only Donchian should mostly sit in cash and lose
+    # far less than buy-and-hold (which eats the full decline)
+    bear = [("AAA", synthetic_candles(n=400, seed=1, drift=-0.004, vol=0.01)),
+            ("BBB", synthetic_candles(n=400, seed=2, drift=-0.004, vol=0.01))]
+    base = StrategyConfig(donchian_entry_period=20, donchian_exit_period=10)
+    bt = BacktestConfig(initial_equity=8_000.0, fee_pct=0.6, slippage_pct=0.05)
+    res = portfolio_backtest(bear, base, bt)
+    assert res.buyhold_pct < 0.0            # holding a downtrend loses
+    assert res.exposure_pct < 60.0          # mostly in cash, not fully invested
+    assert res.net_pct > res.buyhold_pct    # trend preserved capital vs holding
 
 
 def test_no_common_window_raises() -> None:
