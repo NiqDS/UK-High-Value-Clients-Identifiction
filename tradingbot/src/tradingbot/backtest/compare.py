@@ -118,6 +118,41 @@ def mvrv_experiments(base: StrategyConfig, series, overlay, gate: bool) -> list[
     ]
 
 
+def segment_report(
+    candles, base: StrategyConfig, n_segments: int, fee_pct: float,
+    slippage_pct: float, metric: Metric, label: str = "",
+) -> str:
+    """Run the FIXED baseline + mean-reversion strategies on each of N sequential,
+    non-overlapping time segments — does the edge hold over time, or was it one
+    lucky period? (Each segment is scored standalone; no parameters are learned.)"""
+    bt = BacktestConfig(fee_pct=fee_pct, slippage_pct=slippage_pct)
+    seg = max(1, len(candles) // n_segments)
+    base_f = lambda: SmaCrossoverStrategy(base.model_copy(update={"vwap_filter_enabled": False}))
+    rev_f = lambda: VwapReversionStrategy(base)
+    lines = [
+        f"# Robustness across {n_segments} sequential segments — {label}",
+        f"fee {fee_pct}%/side, slippage {slippage_pct}%/fill | each segment scored standalone",
+        "",
+        "seg |  bars | baseline net% / score (trades) | reversion net% / score (trades)",
+    ]
+    rev_pos = rev_win = 0
+    for i in range(n_segments):
+        s = candles[i * seg:] if i == n_segments - 1 else candles[i * seg:(i + 1) * seg]
+        rb = Backtester(bt).run(s, base_f())
+        rr = Backtester(bt).run(s, rev_f())
+        bs, rs = metric(rb), metric(rr)
+        rev_pos += rr.net_return_pct > 0
+        rev_win += rs > bs and rr.net_return_pct > 0
+        lines.append(
+            f"{i:2d}  | {len(s):5d} | {rb.net_return_pct:+6.2f} / {bs:+6.3f} ({rb.num_trades:3d}) "
+            f"      | {rr.net_return_pct:+6.2f} / {rs:+6.3f} ({rr.num_trades:3d})")
+    lines += ["", "### Read",
+              f"- mean-reversion net-positive in **{rev_pos}/{n_segments}** segments; "
+              f"beats baseline in **{rev_win}/{n_segments}**.",
+              "- A real edge is positive in MOST segments. Concentrated in one => fragile/lucky."]
+    return "\n".join(lines)
+
+
 def score_experiment(candles, exp: Experiment, bt_config: BacktestConfig, metric: Metric) -> ExpScore:
     oos = Backtester(bt_config).run_oos(candles, exp.factory)[1]
     return ExpScore(

@@ -432,6 +432,30 @@ def _fetch_funding(settings: Settings, args) -> int:
     return 0
 
 
+def _robustness(settings: Settings, args) -> int:
+    from pathlib import Path
+
+    from .backtest.compare import segment_report
+    from .backtest.data import load_csv
+    from .backtest.metrics import METRICS
+
+    if not args.csv:
+        logger.error("--csv PATH is required")
+        return 2
+    candles = load_csv(args.csv)
+    if len(candles) < 50:
+        logger.error("%s has only %d bars", args.csv, len(candles))
+        return 2
+    report = segment_report(candles, settings.config.strategy, args.segments,
+                            args.fee, args.slippage, METRICS[args.metric], label=args.csv)
+    print(report)
+    if args.report:
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote robustness report to %s", args.report)
+    return 0
+
+
 def _cross_asset(settings: Settings, args) -> int:
     from pathlib import Path
 
@@ -752,7 +776,7 @@ def main() -> int:
         "command",
         choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
-                 "regime", "fetch-funding", "fetch-onchain", "cross-asset"],
+                 "regime", "fetch-funding", "fetch-onchain", "cross-asset", "robustness"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -792,6 +816,8 @@ def main() -> int:
     parser.add_argument("--start", default=None, help="fetch-onchain start date (YYYY-MM-DD)")
     parser.add_argument("--asset", action="append", default=[],
                         help="cross-asset entry LABEL=path.csv[@fee] (repeatable)")
+    parser.add_argument("--segments", type=int, default=5,
+                        help="robustness: number of sequential time segments")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)
@@ -829,6 +855,8 @@ def main() -> int:
         return _fetch_onchain(settings, args)
     if args.command == "cross-asset":
         return _cross_asset(settings, args)
+    if args.command == "robustness":
+        return _robustness(settings, args)
     return 2  # pragma: no cover
 
 
