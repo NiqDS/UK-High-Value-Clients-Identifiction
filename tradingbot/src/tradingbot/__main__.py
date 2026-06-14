@@ -534,6 +534,53 @@ def _fetch_onchain(settings: Settings, args) -> int:
     return 0
 
 
+def _portfolio(settings: Settings, args) -> int:
+    from pathlib import Path
+
+    from .backtest.data import load_csv
+    from .backtest.engine import BacktestConfig
+    from .backtest.portfolio import portfolio_backtest, portfolio_report
+
+    if not args.asset:
+        logger.error("pass one or more --asset LABEL=path.csv  "
+                     "(e.g. --asset BTC=data/btc_1d_long.csv --asset ETH=data/eth_1d_long.csv)")
+        return 2
+    if args.weight_mode not in ("equal", "invvol"):
+        logger.error("--weight-mode must be 'equal' or 'invvol'")
+        return 2
+    assets = []
+    for spec in args.asset:
+        # accept the same LABEL=path[@fee] spec as cross-asset; the @fee is ignored
+        # here (one basket-wide --fee applies, since sleeves share a cost model).
+        label, _, rest = spec.partition("=")
+        path = rest.split("@", 1)[0] if rest else ""
+        if not label or not path:
+            logger.error("bad --asset spec %r (want LABEL=path.csv)", spec)
+            return 2
+        if not Path(path).exists():
+            logger.error("asset CSV not found: %s", path)
+            return 2
+        candles = load_csv(path)
+        if len(candles) < 50:
+            logger.error("%s has only %d bars — fetch likely failed", path, len(candles))
+            return 2
+        assets.append((label, candles))
+    bt = BacktestConfig(initial_equity=args.equity, fee_pct=args.fee, slippage_pct=args.slippage)
+    try:
+        result = portfolio_backtest(assets, settings.config.strategy, bt,
+                                    weight_mode=args.weight_mode)
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 2
+    report = portfolio_report(result, label=f"{len(assets)} coins")
+    print(report)
+    if args.report:
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote portfolio report to %s", args.report)
+    return 0
+
+
 def _compare(settings: Settings, args) -> int:
     from .backtest.compare import (
         default_experiments, funding_experiments, mvrv_experiments, run_comparison,
@@ -803,7 +850,7 @@ def main() -> int:
         choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
                  "regime", "fetch-funding", "fetch-onchain", "cross-asset", "robustness",
-                 "trend-sweep"],
+                 "trend-sweep", "portfolio"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -845,6 +892,8 @@ def main() -> int:
                         help="cross-asset entry LABEL=path.csv[@fee] (repeatable)")
     parser.add_argument("--segments", type=int, default=5,
                         help="robustness: number of sequential time segments")
+    parser.add_argument("--weight-mode", default="equal", choices=["equal", "invvol"],
+                        help="portfolio: capital weighting (equal | inverse-volatility)")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)
@@ -886,6 +935,8 @@ def main() -> int:
         return _robustness(settings, args)
     if args.command == "trend-sweep":
         return _trend_sweep(settings, args)
+    if args.command == "portfolio":
+        return _portfolio(settings, args)
     return 2  # pragma: no cover
 
 

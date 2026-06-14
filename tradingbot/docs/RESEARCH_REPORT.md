@@ -255,6 +255,42 @@ for c in btc eth bnb ada avax doge trx; do
 done
 ```
 
+### Trade the basket: the `portfolio` index backtest
+
+Because each coin trades only a handful of times, the honest way to deploy the
+edge is as one **basket**, not seven separate bets. The `portfolio` command
+bundles the trend-majors into an equal-weight (or inverse-volatility) index: the
+starting capital is split into per-coin *sleeves*, each sleeve runs the same
+Donchian strategy and is **fully deployed when its coin is in an uptrend, cash
+otherwise**, and the sleeve equity curves are summed (over the common date
+window) into one index curve.
+
+It reports each coin's **weight** three ways so you can see who carries the
+basket:
+- **alloc%** — capital weight in (equal = 1/N, or 1/vol normalised);
+- **contrib%** — share of the basket's net P&L (who actually drove it; negative
+  for a losing coin);
+- **final%** — share of the ending bundle value.
+
+The key payoff is visible in one line of the report: the **index drawdown is far
+lower than the average single-coin drawdown**, because pooling N convex, thin
+trend streams diversifies the outlier dependence — when one coin's big trend
+trade misses, another's lands. Run it:
+```
+python3 -m tradingbot portfolio \
+  --asset BTC=data/btc_1d_long.csv  --asset ETH=data/eth_1d_long.csv \
+  --asset BNB=data/bnb_1d_long.csv  --asset ADA=data/ada_1d_long.csv \
+  --asset AVAX=data/avax_1d_long.csv --asset DOGE=data/doge_1d_long.csv \
+  --asset TRX=data/trx_1d_long.csv \
+  --equity 70000 --fee 0.1 --slippage 0.05 \
+  --weight-mode equal --report reports/trend_index.md
+# swap --weight-mode invvol for a risk-parity-style index (calmer coins weighted up)
+```
+Note: each sleeve deploys its *full* allocation on a long (target notional =
+sleeve), unlike the tiny fixed notional in the single-coin `compare`/`robustness`
+runs — so the index net% reflects real capital at work, not the 0.4%-sized
+sleeves used to test signal *sign*.
+
 ## 5d. The trend edge is timeframe-specific — it dies on 1-minute bars
 
 To test whether the daily edge ports to intraday execution, we built
@@ -410,4 +446,10 @@ python3 -m tradingbot compare     --source csv --csv data/btc_1d_long.csv --oos 
 python3 -m tradingbot walkforward --source csv --csv data/spy.csv --fee 0.01 --slippage 0.005
 python3 -m tradingbot cross-asset --asset BTC=data/btc_1d_long.csv@0.6 --asset SPY=data/spy.csv@0.01 --oos 0.4
 python3 -m tradingbot regime      --csv data/btc_1d_long.csv
+
+# the trend basket as one index (equal- or inverse-vol-weight; reports per-coin weights)
+python3 -m tradingbot portfolio --asset BTC=data/btc_1d_long.csv --asset ETH=data/eth_1d_long.csv \
+    --asset BNB=data/bnb_1d_long.csv --asset ADA=data/ada_1d_long.csv --asset AVAX=data/avax_1d_long.csv \
+    --asset DOGE=data/doge_1d_long.csv --asset TRX=data/trx_1d_long.csv \
+    --equity 70000 --fee 0.1 --slippage 0.05 --weight-mode equal
 ```
