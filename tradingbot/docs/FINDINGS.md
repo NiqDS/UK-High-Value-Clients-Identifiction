@@ -43,19 +43,26 @@ than flatter them — which is exactly why the one real edge stands out.
 
 ## Cross-asset — the thesis was right, the asset was wrong
 
-The same mean-reversion strategy, run through the identical harness on **SPY**
-(~10y daily, 1bp fees), flips from *worst on crypto* to **best and positive**:
-+0.10% net, 0.05% max drawdown, risk-adjusted score **+0.99** over 62 trades.
-On BTC the same strategy lost on every run.
+The same mean-reversion strategy, run through the identical harness on **equity
+indices**, flips from *worst on crypto* to **best and positive** — and it
+replicates across two independent indices:
 
-Why: equity indices **mean-revert** (dips bought) with strong upward drift and
-far lower volatility, so "fade the move" works; BTC **trends** and is too
-volatile, so it gets run over. The project's founding thesis — *volatility is
-more predictable than direction* — holds, but it fits **equity indices, not
-crypto.** Caveats: the magnitude is tiny (+0.10% total over the OOS window — beats
-fees, not a money machine); it's one asset / one period / daily bars and needs
-walk-forward + more ETFs to trust; and acting on it needs an **equity broker**
-(this bot trades crypto), so it's a separate build.
+| Asset | Class | Mean-reversion (net% / score / trades) | Wins? |
+|---|---|---|---|
+| QQQ | Nasdaq-100 | +0.13 / +1.30 / 77t | **YES** |
+| SPY | S&P 500 | +0.10 / +0.99 / 62t | **YES** |
+| TLT | 20y bonds | −0.03 / −0.35 / 101t | no |
+| BTC | crypto | −0.94 / −1.00 / 199t | no |
+
+Why: it's **mean-reverting vs trending**, not equities vs crypto. Equity indices
+mean-revert (dips bought, low vol) → "fade the move" works. BTC trends and
+whipsaws → reversion gets run over. TLT trended over 2016–2025 → reversion mildly
+negative too. The project's founding thesis — *volatility is more predictable
+than direction* — holds, but fits **mean-reverting instruments (equity indices),
+not crypto.** Caveats: the magnitude is small (+0.10–0.13% total over the OOS
+window — beats fees, not a money machine); needs walk-forward to confirm across
+time windows; and acting on it needs an **equity broker** (this bot trades
+crypto), so it's a separate build.
 
 ## Funding rate — the most-scrutinized signal
 

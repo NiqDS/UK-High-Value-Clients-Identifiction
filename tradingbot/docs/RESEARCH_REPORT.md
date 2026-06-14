@@ -101,16 +101,20 @@ a no-edge entry into a winning one.
 The same baseline + mean-reversion strategies, run through `cross-asset` on each
 market with its own realistic fee:
 
-| Asset | Class | Mean-reversion OOS | Verdict |
+| Asset | Class | Mean-reversion OOS (net% / score / trades) | Verdict |
 |---|---|---|---|
-| **SPY** (S&P 500 ETF) | equity index | **+0.10% net, 45% win, 62 trades, 0.05% maxdd, score +0.99** | **Positive edge** |
-| BTC (daily) | crypto | −1.02% net, 16% win | No edge (loses) |
-| TLT (20y Treasuries) | bonds | *pending — download CSV* | — |
-| QQQ (Nasdaq-100) | equity index | *pending — download CSV* | — |
+| **QQQ** (Nasdaq-100) | equity index | **+0.13 / +1.30 / 77t** | **Positive edge** |
+| **SPY** (S&P 500) | equity index | **+0.10 / +0.99 / 62t** | **Positive edge** |
+| TLT (20y Treasuries) | bonds | −0.03 / −0.35 / 101t | No edge (mild) |
+| BTC (daily) | crypto | −0.94 / −1.00 / 199t | No edge (loses badly) |
 
-**Why it flips:** equity indices mean-revert (dips bought) with upward drift and
-much lower volatility — "fade the move" works. BTC trends and whipsaws — the same
-logic gets run over. The thesis was sound; the asset was wrong.
+**Why it splits this way:** it is *not* "equities vs crypto" — it's
+**mean-reverting vs trending**. Equity indices mean-revert (dips bought) with
+upward drift and low volatility → "fade the move" works → positive on both SPY
+and QQQ. BTC trends and whipsaws → reversion gets run over. TLT (20y Treasuries)
+*trended* over 2016–2025 (the 2022 rate selloff was one long move) → reversion
+mildly negative there too, behaving more like BTC than like stocks. Two
+independent equity indices replicating the edge makes it credible, not a fluke.
 
 **To complete this section**, download TLT and QQQ daily CSVs (Nasdaq → browser),
 then:
