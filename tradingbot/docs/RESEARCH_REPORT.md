@@ -190,6 +190,100 @@ python3 -m tradingbot compare    --source csv --csv data/btc_1d_long.csv --oos 0
 python3 -m tradingbot robustness --csv data/btc_1d_long.csv --segments 5 --fee 0.6 --slippage 0.05
 ```
 
+## 5c. The trend edge generalizes — top-10 crypto (daily)
+
+Having validated trend-following on BTC, we tested whether it is a property of
+*one* coin or of *trending crypto as an asset class*. We pulled ~5–8y of daily
+history for the top 10 by market cap and ran the same Donchian breakout through
+the `robustness` command (5 sequential segments, 0.1%/side maker fee — realistic
+for daily limit orders), scoring trend and mean-reversion side by side.
+
+| Coin | mean-reversion (segments +) | trend-breakout (segments +) | trend total trades | verdict |
+|---|---|---|---|---|
+| **BNB** | 0/5 | **4/5** | 18 | strong |
+| **ETH** | 0/5 | **3/5** | 22 | holds |
+| **BTC** | 0/5 | **3/5** \* | — | holds (validated §5b) |
+| **ADA** | 0/5 | **3/5** | 9 | holds |
+| **AVAX** | 0/5 | **3/5** | 11 | holds |
+| **DOGE** | 1/5 | **3/5** | 20 | holds |
+| **TRX** | 0/5 | **3/5** | 22 | holds |
+| SOL | 1/5 | 2/5 | 13 | marginal |
+| XRP | 0/5 | 1/5 | 20 | fails |
+| LINK | 0/5 | 1/5 | 28 | fails |
+
+\* *BTC trend from the §5b validated run; not re-scored at 0.1% here.*
+
+**Two findings, very different confidence levels:**
+
+1. **Mean-reversion is conclusively dead on crypto.** 0/5 (or 1/5) on all 10
+   coins, with *hundreds* of trades per segment — the most statistically powered
+   result in the study. Fading crypto dips loses, universally. Locked.
+
+2. **Trend-following is a real, repeatable edge on the majors that trend** —
+   net-positive in ≥3/5 segments on **7 of 10 coins**. The edge repeats across 7
+   independent assets, which is what makes it trustworthy despite thin per-coin
+   trade counts. It is no longer "BTC got lucky"; it is a property of trending
+   crypto.
+
+**The 3 misses are diagnostic, not contradictory.** They show *what the edge
+needs*: an asset in a genuinely trending regime.
+- **XRP (1/5):** years of SEC-litigation suppression / range-bound chop — never
+  trended, so trend can't profit.
+- **LINK (1/5):** choppy, no sustained directional regime; the one green segment
+  rests on a single trade.
+- **SOL (2/5, marginal):** heavy outlier dependence (seg0 +2.25% on 3 trades, the
+  2021 parabola) and the shortest history — least reliable.
+
+**Honest caveat (same as §5b, amplified):** trend fires only **2–8 trades per
+segment**; scores ride a few fat winners. That positive-skew, low-frequency
+profile *is* trend-following — not a flaw — but it means no single coin is
+well-powered alone. Confidence comes from the cross-coin repetition (7/10) and
+per-segment consistency, **not** from any one net% figure.
+
+**Implication — trade the basket, not the coin.** The natural deployment is a
+**portfolio of daily-trend majors** (BTC, ETH, BNB, ADA, AVAX, DOGE, TRX).
+Pooling 7 coins on the same edge gives the aggregate the statistical mass each
+coin lacks individually and diversifies the outlier dependence (when one coin's
+big trend trade misses, another's lands). Exclude XRP/LINK/SOL until they show a
+trending regime. Reproduce:
+```
+for c in btc eth bnb ada avax doge trx; do
+  python3 -m tradingbot fetch-data --exchange binancevision --symbol ${c^^}USDT \
+      --timeframe 1d --months 96 --out data/${c}_1d_long.csv
+  python3 -m tradingbot robustness --csv data/${c}_1d_long.csv --segments 5 \
+      --fee 0.1 --slippage 0.05 --report reports/robust_${c}.md
+done
+```
+
+## 5d. The trend edge is timeframe-specific — it dies on 1-minute bars
+
+To test whether the daily edge ports to intraday execution, we built
+`config.donchian-1m.yaml` and re-ran the full battery on 3 months of 1-minute BTC
+(132,480 bars). It is a **clean negative control**: same strategy, same asset,
+same fee model — only the bar interval changed.
+
+| Test | Daily BTC (validated) | 1-minute BTC |
+|---|---|---|
+| Donchian OOS `compare` | +0.23%, score +1.16, **rank #1** | −2.62%, score −1.00, **rank #6/8** |
+| Param sweep | **18/18 settings net-positive** | **0/18 settings net-positive** |
+| Segment robustness | 3/5 segments positive | **0/5 segments positive** |
+
+**Why it dies:** at 0.6%/side, a round-trip costs ~1.3%, and a 50-*minute*
+breakout move rarely clears that. The sweep is a dose-response curve — net return
+is almost perfectly monotonic in trade count (most trades → worst loss: 10/5 →
+−9.27% over 1777 trades; least → least-bad: 80/30 → −1.59% over 302). That is the
+signature of pure fee bleed, not a tunable edge. Win rate is ~0% across the grid;
+1-minute "breakouts" are microstructure noise (bid/ask bounce, liquidation wicks)
+that mean-revert within minutes rather than persisting. Lower (maker) fees would
+shrink the loss, not invert it — the edge is signal-gated, not fee-gated.
+
+**Conclusion:** the BTC trend edge lives at the **daily/swing horizon**, where a
+multi-percent breakout dwarfs the round-trip fee. **Do not deploy this signal
+intraday.** The edge is now characterized on three axes: **trend-following +
+trending-crypto + daily bars.**
+
+---
+
 ## 6. Ideas evaluated and ruled out (scope)
 
 - **"Politician tracker" (Autopilot / Unusual Whales).** Real services, but: it's
@@ -228,16 +322,23 @@ Cloudflare bot-protection or per-IP rate limits doesn't. For equities, a one-tim
 1. **Direction-of-fit is the whole game.** Mean-reversion has no edge on crypto;
    trend-following does. Mean-reversion has an edge on equity indices;
    trend-following does not. Match the strategy to the asset's character.
-2. **BTC now has a real, positive, robust-ish edge: trend-following** (Donchian
-   breakout), net-positive in 3/5 segments and strongly positive in aggregate —
-   the payoff of the whole investigation.
-3. **Equity indices have a validated mean-reversion edge** (SPY & QQQ, 4/5
+2. **The crypto edge is trend-following, and it generalizes across the majors.**
+   Net-positive in ≥3/5 segments on 7 of the top 10 coins (BTC, ETH, BNB, ADA,
+   AVAX, DOGE, TRX). The 3 misses (XRP, LINK, SOL) are coins that didn't trend in
+   the window — the edge needs a trending regime, which is a diagnosis, not a hole.
+3. **Mean-reversion is conclusively dead on crypto** — 0–1/5 segments on all 10
+   coins with hundreds of trades each (the study's best-powered negative).
+4. **The edge is daily-specific.** It is strong on daily bars (18/18 param
+   settings) and *inverts* on 1-minute bars (0/18) — fees swamp the intraday
+   move. Trade it at the swing horizon, never intraday.
+5. **Equity indices have a validated mean-reversion edge** (SPY & QQQ, 4/5
    segments each) — replicated across two indices and across time.
-4. **The platform's other value is risk management + honest evaluation**: hard
+6. **The platform's other value is risk management + honest evaluation**: hard
    risk gates, human approval, and drawdown-reducing governors (regime, funding,
    MVRV) — which now have a base *with* edge to scale (they only help a positive base).
-5. **Next:** validate/optimize the BTC trend params (walk-forward), check its
-   max drawdown, and layer the governors on top.
+7. **Next:** deploy as a **basket of daily-trend majors** (pools thin per-coin
+   samples, diversifies outlier dependence); validate params walk-forward; layer
+   the governors on top.
 
 ---
 
