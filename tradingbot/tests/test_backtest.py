@@ -125,3 +125,45 @@ def test_summary_mentions_net_of_fees() -> None:
     text = res.summary("in-sample")
     assert "NET return" in text
     assert "fees paid" in text
+
+
+class OversizedBuyStrategy(Strategy):
+    """Asks to buy far more notional than the account holds, then sells — used to
+    prove the engine caps deployment at available cash (no implicit leverage)."""
+
+    name = "oversized"
+
+    def generate_signals(self, market: MarketData) -> list[OrderIntent]:
+        n = len(market.candles)
+        if n == 1 and not market.holding:
+            return [OrderIntent(symbol=market.symbol, side=Side.BUY, amount=1_000_000.0,
+                                order_type=OrderType.MARKET, is_entry=True)]
+        if n == 3 and market.holding:
+            return [OrderIntent(symbol=market.symbol, side=Side.SELL, amount=1_000_000.0,
+                                order_type=OrderType.MARKET, is_entry=False)]
+        return []
+
+
+def test_no_leverage_caps_deployment_at_cash() -> None:
+    # price 100, equity 1000 -> at most ~10 units affordable, not the 1,000,000 asked
+    cs = candles([(100, 100), (100, 100), (100, 50), (100, 50), (100, 50)])
+    bt = Backtester(BacktestConfig(initial_equity=1_000, fee_pct=0.0, slippage_pct=0.0))
+    res = bt.run(cs, OversizedBuyStrategy())
+    assert res.num_trades == 1
+    # bought ~10 units (cash/price), so the 50% drop costs ~500, never more than equity
+    assert res.trades[0].units == pytest.approx(10.0, rel=1e-6)
+    # equity never goes negative and drawdown is bounded at 100%
+    assert min(res.equity_curve) >= 0.0
+    assert res.max_drawdown_pct <= 100.0
+
+
+def test_full_deployment_drawdown_bounded() -> None:
+    # full-sleeve sizing on a volatile series: equity stays non-negative throughout
+    cs = synthetic_candles(n=300, seed=7, drift=-0.003, vol=0.05)
+    base = StrategyConfig(name="donchian_breakout", donchian_entry_period=10,
+                          donchian_exit_period=5, target_notional_quote=10_000.0)
+    from tradingbot.strategy.trend import DonchianBreakoutStrategy
+    res = Backtester(BacktestConfig(initial_equity=10_000.0, fee_pct=0.6,
+                                    slippage_pct=0.05)).run(cs, DonchianBreakoutStrategy(base))
+    assert min(res.equity_curve) >= 0.0
+    assert res.max_drawdown_pct <= 100.0

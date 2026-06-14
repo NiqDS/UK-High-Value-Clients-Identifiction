@@ -388,9 +388,10 @@ trades concentrate into fewer, larger, later positions (lumpier timing). **Lesso
 (same as the governors): never gate a strategy whose edge is early entries with a
 lagging trend filter.** The capital preservation we wanted already comes free
 from the channel exit + naturally-low bear exposure (~10%); the raw breakout is
-the better system. *(Caveat: DOGE's gated maxdd reads 159.9% — an artifact of the
-full-deployment sizing implicitly leveraging a re-entry after a loss into a
-violent gap; it inflates the gated index maxdd but the return verdict is decisive
+the better system. *(The gated DOGE sleeve originally read maxdd 159.9% — an
+artifact of full-deployment sizing implicitly leveraging a re-entry after a loss
+into a violent gap. The engine now caps every entry at available cash (no
+leverage), which bounds drawdown at 100%; the return verdict was decisive
 regardless.)*
 
 ## 5d. The trend edge is timeframe-specific — it dies on 1-minute bars

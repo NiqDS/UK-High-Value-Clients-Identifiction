@@ -127,16 +127,26 @@ class Backtester:
                 if action == "buy" and pos is None:
                     fill = bar.open * (1 + slip)  # adverse
                     units = intent.amount  # type: ignore[attr-defined]
-                    entry_fee = units * fill * fee_rate
-                    cash -= units * fill + entry_fee
-                    fees_total += entry_fee
-                    pos = _Position(
-                        entry_price=fill, units=units, entry_ts=bar.timestamp,
-                        take_profit=intent.take_profit_price,  # type: ignore[attr-defined]
-                        stop=intent.stop_price,  # type: ignore[attr-defined]
-                        entry_fee=entry_fee,
-                        trail_distance=(intent.metadata or {}).get("trail_distance"),  # type: ignore[attr-defined]
-                    )
+                    # No leverage: never deploy more than the cash on hand (notional +
+                    # entry fee). With full-deployment sizing this stops a re-entry
+                    # after a loss from spending cash the account no longer has — which
+                    # would otherwise drive equity (and so drawdown) past 100%.
+                    if cash > 0 and fill > 0:
+                        max_units = cash / (fill * (1 + fee_rate))
+                        units = min(units, max_units)
+                    else:
+                        units = 0.0
+                    if units > 0:
+                        entry_fee = units * fill * fee_rate
+                        cash -= units * fill + entry_fee
+                        fees_total += entry_fee
+                        pos = _Position(
+                            entry_price=fill, units=units, entry_ts=bar.timestamp,
+                            take_profit=intent.take_profit_price,  # type: ignore[attr-defined]
+                            stop=intent.stop_price,  # type: ignore[attr-defined]
+                            entry_fee=entry_fee,
+                            trail_distance=(intent.metadata or {}).get("trail_distance"),  # type: ignore[attr-defined]
+                        )
                 elif action == "sell" and pos is not None:
                     close(bar.open * (1 - slip), bar.timestamp, "signal exit")
 
