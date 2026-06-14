@@ -221,6 +221,21 @@ def test_fee_gate_requires_take_profit() -> None:
     assert d.gate is RiskGate.FEE_GATE
 
 
+def test_no_tp_passes_fee_gate_when_not_required() -> None:
+    # trend-rider config: no take-profit, but require_take_profit off -> approved
+    cfg = make_config(fees={"require_take_profit": False})
+    d = make_engine(cfg).evaluate(base_intent(take_profit_price=None), base_snapshot())
+    assert d.approved is True and d.gate is RiskGate.OK
+
+
+def test_tp_entry_still_gated_when_not_required() -> None:
+    # turning the requirement off must NOT weaken the gate for entries that DO
+    # carry a take-profit: an unprofitable TP is still rejected.
+    cfg = make_config(fees={"require_take_profit": False})
+    d = make_engine(cfg).evaluate(base_intent(take_profit_price=100.1), base_snapshot())
+    assert d.gate is RiskGate.FEE_GATE
+
+
 def test_fee_gate_uses_taker_when_fallback_allowed() -> None:
     # With taker fees (0.6%/leg) a marginal TP that passed on maker now fails.
     cfg_maker = make_config(fees={"allow_taker_fallback": False})

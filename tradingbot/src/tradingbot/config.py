@@ -96,6 +96,11 @@ class FeeConfig(BaseModel):
     maker_offset_pct: float = _pct(0.05)
     max_spread_pct: float = _pct(0.30)
     max_slippage_pct: float = _pct(0.20)
+    # Trend strategies ride the move and have no fixed take-profit (their exit is a
+    # channel/stop break), so the TP-based fee proof cannot apply. Keep this True
+    # for take-profit strategies (SMA/reversion); set False to let no-TP trend
+    # entries through the fee gate (the captured channel move dwarfs the fee).
+    require_take_profit: bool = True
 
 
 class EventConfig(BaseModel):

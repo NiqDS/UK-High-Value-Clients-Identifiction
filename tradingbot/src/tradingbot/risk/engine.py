@@ -231,10 +231,18 @@ class RiskEngine:
                     est_price=est_price, notional=notional,
                 )
 
-        # 13. fee gate — entries must clear round-trip fees + safety margin
+        # 13. fee gate — entries must clear round-trip fees + safety margin.
+        #     A trend-rider has no fixed take-profit (its exit is a channel/stop
+        #     break), so the TP-based proof cannot apply. When require_take_profit is
+        #     off AND there is no TP, skip this gate: the captured channel move
+        #     dwarfs the maker round-trip fee, and the floor / per-trade-risk / sleeve
+        #     caps still bound the trade. TP-bearing entries are always gated.
         fee_pct = self._effective_fee_pct(snapshot)
         rt_fee_quote = self._round_trip_fee_quote(intent, est_price, fee_pct)
-        if intent.is_entry:
+        gate_fees = intent.is_entry and (
+            cfg.fees.require_take_profit or intent.take_profit_price is not None
+        )
+        if gate_fees:
             decision = self._fee_gate(intent, est_price, fee_pct, notional)
             if not decision.approved:
                 return decision
