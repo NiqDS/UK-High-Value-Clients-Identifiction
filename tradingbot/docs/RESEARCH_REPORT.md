@@ -365,10 +365,33 @@ Three behavioral findings:
    channel-exit near top → cash through the bear (nibbling failed breakouts) →
    re-enter on the next breakout.
 
-**Implied next improvement:** a 200-day-SMA regime gate (no longs while price is
-below trend) would suppress the bear-rally false breakouts and push the
-bear-window loss toward flat, at the cost of re-entering the next bull slightly
-late. `trend_filter_enabled` / `trend_period` already exist for this test.
+**Tested next improvement — the 200-day-SMA regime gate (RULED OUT).** The
+hypothesis was that gating longs to "price above its 200d SMA" would suppress the
+bear-rally false breakouts. Run on the full 2020–2026 index (so the SMA warms
+from real prior data), it **failed badly — strictly worse on every axis that
+matters:**
+
+| full-index metric | no gate | 200d gate |
+|---|---|---|
+| net return | **+678%** | +94% |
+| max drawdown | **37.0%** | 49.3% |
+| return / maxdd | **18.3** | 1.9 |
+| time-in-market | 32% | 23% |
+
+It cut return by **86%** *and raised* drawdown. Why: trend-following's edge is a
+**convex right tail** — the biggest gains come at the *start* of a new uptrend,
+when price first breaks out from a bottom while the 200d SMA still sits far
+overhead. The gate blocks exactly those early entries, so you buy late into
+mature, reversal-prone trends; every coin's return collapsed (BNB +1394%→+111%,
+ADA +993%→+90%, DOGE +953%→+36%). Drawdown got *worse* because the few allowed
+trades concentrate into fewer, larger, later positions (lumpier timing). **Lesson
+(same as the governors): never gate a strategy whose edge is early entries with a
+lagging trend filter.** The capital preservation we wanted already comes free
+from the channel exit + naturally-low bear exposure (~10%); the raw breakout is
+the better system. *(Caveat: DOGE's gated maxdd reads 159.9% — an artifact of the
+full-deployment sizing implicitly leveraging a re-entry after a loss into a
+violent gap; it inflates the gated index maxdd but the return verdict is decisive
+regardless.)*
 
 ## 5d. The trend edge is timeframe-specific — it dies on 1-minute bars
 
