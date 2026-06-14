@@ -67,6 +67,8 @@ class PortfolioResult:
     weight_mode: str
     fee_pct: float           # cost model the run used (echoed so a report is self-documenting)
     slippage_pct: float
+    regime_filter: bool      # whether the 200d-SMA regime gate was applied
+    regime_period: int
     avg_sleeve_maxdd: float  # mean per-coin drawdown — the diversification benchmark
     exposure_pct: float      # capital-weighted time-in-market across the basket
     buyhold_pct: float       # weighted buy-and-hold return (the "just hold" benchmark)
@@ -225,6 +227,7 @@ def portfolio_backtest(
         maxdd_pct=_max_drawdown_pct(portfolio_curve), trades=total_trades,
         bars=n_bars, start_ts=timestamps[0], end_ts=timestamps[-1],
         weight_mode=weight_mode, fee_pct=bt.fee_pct, slippage_pct=bt.slippage_pct,
+        regime_filter=base.trend_filter_enabled, regime_period=base.trend_period,
         avg_sleeve_maxdd=sum(maxdds) / len(maxdds) if maxdds else 0.0,
         exposure_pct=exp_weighted,
         buyhold_pct=(bh_final / total_initial - 1.0) * 100.0 if total_initial else 0.0,
@@ -247,6 +250,8 @@ def portfolio_report(result: PortfolioResult, label: str = "") -> str:
         f"{len(r.sleeves)} coins, {r.weight_mode}-weight | "
         f"{r.bars} common daily bars ({_fmt_ts(r.start_ts)} → {_fmt_ts(r.end_ts)})",
         f"fees {r.fee_pct}%/side, slippage {r.slippage_pct}%/fill | "
+        + (f"regime gate: long only above the {r.regime_period}d SMA"
+           if r.regime_filter else "no regime gate (raw breakout)"),
         "each sleeve runs Donchian breakout, fully deployed when long, cash otherwise",
         "",
         "coin   | alloc% | net%   | buy&hold% | expo% | maxdd% | trades",

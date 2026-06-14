@@ -60,3 +60,38 @@ def test_channel_exit_when_holding() -> None:
 def test_hold_when_above_exit_channel() -> None:
     prices = [100, 100, 100, 100, 105, 106, 107]  # trending up, stay in
     assert DonchianBreakoutStrategy(cfg()).generate_signals(market(prices, holding=True)) == []
+
+
+def test_regime_gate_blocks_breakout_below_sma() -> None:
+    # a downtrend that consolidates low then stages a relief-rally breakout: price
+    # (110) pops above the prior 3-bar high (100) but is still below the 7-bar SMA
+    # (~123) -> the regime gate suppresses the long.
+    prices = [200, 150, 100, 100, 100, 100, 110]
+    base = dict(trend_filter_enabled=True, trend_period=7,
+                donchian_entry_period=3, donchian_exit_period=2)
+    ungated = dict(donchian_entry_period=3, donchian_exit_period=2)
+    # sanity: without the gate the same breakout WOULD fire
+    assert DonchianBreakoutStrategy(cfg(**ungated)).generate_signals(market(prices)) != []
+    assert DonchianBreakoutStrategy(cfg(**base)).generate_signals(market(prices)) == []
+
+
+def test_regime_gate_allows_breakout_above_sma() -> None:
+    # uptrend: breakout above the prior high AND above the SMA -> long fires
+    prices = [100, 101, 102, 103, 104, 105, 112]
+    c = cfg(trend_filter_enabled=True, trend_period=6)
+    sigs = DonchianBreakoutStrategy(c).generate_signals(market(prices))
+    assert len(sigs) == 1 and sigs[0].side == Side.BUY
+
+
+def test_regime_gate_stands_aside_without_enough_history() -> None:
+    prices = [100, 100, 100, 100, 100, 100, 105]  # only 7 bars, need 200
+    c = cfg(trend_filter_enabled=True, trend_period=200)
+    assert DonchianBreakoutStrategy(c).generate_signals(market(prices)) == []
+
+
+def test_regime_gate_never_blocks_exit() -> None:
+    # holding into a breakdown below the SMA must still EXIT (gate is entry-only)
+    prices = [200, 180, 160, 140, 120, 110, 95]
+    c = cfg(trend_filter_enabled=True, trend_period=6)
+    sigs = DonchianBreakoutStrategy(c).generate_signals(market(prices, holding=True))
+    assert len(sigs) == 1 and sigs[0].side == Side.SELL

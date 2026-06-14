@@ -144,6 +144,25 @@ def test_bear_window_low_exposure_preserves_capital() -> None:
     assert res.net_pct > res.buyhold_pct    # trend preserved capital vs holding
 
 
+def test_regime_filter_reduces_exposure_in_downtrend() -> None:
+    # in a steady downtrend the 200d gate should keep exposure at/near zero
+    # (no longs below the SMA), at most equal to the ungated run
+    bear = [("AAA", synthetic_candles(n=500, seed=1, drift=-0.003, vol=0.012)),
+            ("BBB", synthetic_candles(n=500, seed=2, drift=-0.003, vol=0.012))]
+    bt = BacktestConfig(initial_equity=8_000.0, fee_pct=0.6, slippage_pct=0.05)
+    off = portfolio_backtest(bear, StrategyConfig(donchian_entry_period=20, donchian_exit_period=10),
+                             bt)
+    on = portfolio_backtest(
+        bear,
+        StrategyConfig(donchian_entry_period=20, donchian_exit_period=10,
+                       trend_filter_enabled=True, trend_period=100),
+        bt)
+    assert on.regime_filter is True and off.regime_filter is False
+    assert on.exposure_pct <= off.exposure_pct
+    report = portfolio_report(on, label="x")
+    assert "regime gate: long only above the 100d SMA" in report
+
+
 def test_no_common_window_raises() -> None:
     a = [Candle(timestamp=1000 + i * 60_000, open=1, high=1, low=1, close=1, volume=1)
          for i in range(60)]

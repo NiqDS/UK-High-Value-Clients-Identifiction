@@ -47,6 +47,20 @@ class DonchianBreakoutStrategy(Strategy):
                     price=price, is_entry=False, reason="donchian channel exit", metadata=meta)]
             return []
 
+        # Regime gate (optional): only take longs when the slow trend agrees, i.e.
+        # price is above its `trend_period`-bar SMA. This suppresses the bear-market
+        # relief-rally false breakouts that whipsaw a long-only trend system; exits
+        # are never gated (you can always leave). No look-ahead — SMA uses closes
+        # up to and including the current bar only.
+        if cfg.trend_filter_enabled:
+            closes = [c.close for c in candles]
+            if len(closes) < cfg.trend_period:
+                return []  # not enough history to know the regime -> stand aside
+            trend_sma = sum(closes[-cfg.trend_period:]) / cfg.trend_period
+            if price <= trend_sma:
+                return []
+            meta["trend_sma"] = trend_sma
+
         # Entry: breakout above the upper channel. Protective stop at the lower
         # channel (the natural trend-following stop); no take-profit — ride it.
         if price > prior_high:

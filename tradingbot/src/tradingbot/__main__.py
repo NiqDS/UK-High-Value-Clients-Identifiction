@@ -590,9 +590,12 @@ def _portfolio(settings: Settings, args) -> int:
                 return 2
         assets.append((label, candles))
     bt = BacktestConfig(initial_equity=args.equity, fee_pct=args.fee, slippage_pct=args.slippage)
+    base = settings.config.strategy
+    if args.trend_filter:
+        base = base.model_copy(update={"trend_filter_enabled": True,
+                                       "trend_period": args.trend_period})
     try:
-        result = portfolio_backtest(assets, settings.config.strategy, bt,
-                                    weight_mode=args.weight_mode)
+        result = portfolio_backtest(assets, base, bt, weight_mode=args.weight_mode)
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
@@ -921,6 +924,10 @@ def main() -> int:
                         help="robustness: number of sequential time segments")
     parser.add_argument("--weight-mode", default="equal", choices=["equal", "invvol"],
                         help="portfolio: capital weighting (equal | inverse-volatility)")
+    parser.add_argument("--trend-filter", action="store_true",
+                        help="portfolio: gate longs on the slow-SMA regime (no longs below it)")
+    parser.add_argument("--trend-period", type=int, default=200,
+                        help="portfolio: SMA length for the regime gate (default 200 = ~200d)")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)
