@@ -334,6 +334,42 @@ sleeve), unlike the tiny fixed notional in the single-coin `compare`/`robustness
 runs — so the index net% reflects real capital at work, not the 0.4%-sized
 sleeves used to test signal *sign*.
 
+### Bear-regime behavior — does it preserve capital? (isolate the window with `--start/--end`)
+
+Running the index on just the 2021–2023 bear (the bull runs sliced off) shows
+what the long-only trend index does when the trend turns down:
+
+| window | trend index | buy & hold | index DD | hold DD | time-in-market |
+|---|---|---|---|---|---|
+| Nov-2021 → Jan-2023 | **−16.0%** | −63.1% | 26.5% | 73.5% | **10%** |
+| 2022 (pure) | **−25.8%** | −64.0% | 26.3% | 64.3% | **9%** |
+
+Three behavioral findings:
+
+1. **It sells near the top and sits in cash.** Time-in-market collapses to ~9–10%
+   — the basket is long only ~1 day in 10 and in cash the rest. Donchian is
+   long-only, so it can't short the downtrend; "spotting the bear" is *passive* —
+   requiring an upside breakout to enter keeps it out of a falling market by
+   default.
+2. **Capital preservation works, ~halving the damage.** Holding the basket was
+   catastrophic (−63%, 73% drawdown); the trend index was painful but survivable
+   (−16 to −26%, ~26% drawdown). It beat buy-and-hold by **+38–47 pts** of return
+   and cut **38–47 pts** of drawdown.
+3. **It still bleeds via whipsaw — the one fixable weakness.** Despite being 90%
+   in cash it lost 16–26%, because each bear-market *relief rally* that poked
+   above the channel triggered a long that then failed and stopped out — small
+   repeated losses (DOGE worst: highest exposure 19–23%, worst loss −43%; AVAX
+   occasionally caught a real bounce, +6.4%). The longer window (−16%) beats pure
+   2022 (−26%) precisely because it includes Jan-2023's recovery, where the algo
+   *re-engages* as breakouts start working again — the full cycle is: ride bull →
+   channel-exit near top → cash through the bear (nibbling failed breakouts) →
+   re-enter on the next breakout.
+
+**Implied next improvement:** a 200-day-SMA regime gate (no longs while price is
+below trend) would suppress the bear-rally false breakouts and push the
+bear-window loss toward flat, at the cost of re-entering the next bull slightly
+late. `trend_filter_enabled` / `trend_period` already exist for this test.
+
 ## 5d. The trend edge is timeframe-specific — it dies on 1-minute bars
 
 To test whether the daily edge ports to intraday execution, we built
