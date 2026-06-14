@@ -205,6 +205,27 @@ def _fetch_data(settings: Settings, args) -> int:
                     len(candles), symbol or "spy.us", args.out)
         return 0
 
+    # Nasdaq historical API: free daily OHLC for ETFs/stocks (no key).
+    # e.g. --exchange nasdaq --symbol QQQ   (TLT, SPY ... assetclass=etf by default)
+    if (args.exchange or "").lower() == "nasdaq":
+        from .backtest.data import save_csv
+        from .exchange.nasdaq import fetch_nasdaq
+
+        try:
+            candles = fetch_nasdaq(symbol or "QQQ", years=max(1, args.months // 12))
+        except Exception as exc:
+            logger.error("Nasdaq fetch failed (%s) — likely blocked. Fallback: download the CSV "
+                         "in a browser and use `--exchange localcsv --csv FILE`.", exc)
+            return 2
+        if not candles:
+            logger.error("Nasdaq returned 0 rows for %s — try the browser download + localcsv.",
+                         symbol or "QQQ")
+            return 2
+        save_csv(args.out, candles)
+        logger.info("Saved %d daily candles from Nasdaq (%s) to %s",
+                    len(candles), symbol or "QQQ", args.out)
+        return 0
+
     # Yahoo Finance chart API: free daily OHLC for stocks/ETFs/bonds (no key).
     # e.g. --exchange yahoo --symbol SPY  (equities), TLT / AGG (bonds).
     if (args.exchange or "").lower() == "yahoo":

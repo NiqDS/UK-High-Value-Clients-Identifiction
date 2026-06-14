@@ -149,3 +149,25 @@ def test_parse_yahoo_chart() -> None:
 
 def test_parse_yahoo_chart_empty() -> None:
     assert parse_yahoo_chart({"chart": {"result": None}}) == []
+
+
+# --- Nasdaq historical API --------------------------------------------------
+def test_parse_nasdaq() -> None:
+    from tradingbot.exchange.nasdaq import parse_nasdaq
+
+    payload = {"data": {"tradesTable": {"rows": [
+        {"date": "06/13/2025", "close": "$520.10", "volume": "30,000,000",
+         "open": "$518.00", "high": "$521.00", "low": "$517.50"},
+        {"date": "06/12/2025", "close": "$515.00", "volume": "28,000,000",
+         "open": "$514.00", "high": "$516.00", "low": "$513.00"},
+    ]}}}
+    candles = parse_nasdaq(payload)
+    assert len(candles) == 2
+    assert candles[0].timestamp < candles[1].timestamp  # sorted ascending
+    assert candles[1].close == 520.10 and candles[0].volume == 28_000_000.0
+
+
+def test_parse_nasdaq_empty() -> None:
+    from tradingbot.exchange.nasdaq import parse_nasdaq
+
+    assert parse_nasdaq({"data": None}) == []
