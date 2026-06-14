@@ -88,6 +88,21 @@ def test_report_renders_index_row_and_weights() -> None:
     assert "INDEX" in report
     assert "alloc%" in report and "contrib%" in report and "final%" in report
     assert "Diversification" in report
+    # the report self-documents the cost model it ran with
+    assert "fees 0.1%/side" in report
+
+
+def test_fee_changes_result() -> None:
+    """A higher fee must lower net return (guards against the fee not reaching
+    the per-coin sleeves)."""
+    base = StrategyConfig(donchian_entry_period=20, donchian_exit_period=10)
+    assets = _assets()
+    lo = portfolio_backtest(
+        assets, base, BacktestConfig(initial_equity=9_000.0, fee_pct=0.1, slippage_pct=0.05))
+    hi = portfolio_backtest(
+        assets, base, BacktestConfig(initial_equity=9_000.0, fee_pct=0.6, slippage_pct=0.05))
+    assert hi.net_pct < lo.net_pct
+    assert hi.fee_pct == 0.6 and lo.fee_pct == 0.1
 
 
 def test_no_common_window_raises() -> None:

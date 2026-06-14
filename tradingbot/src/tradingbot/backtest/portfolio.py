@@ -63,6 +63,8 @@ class PortfolioResult:
     start_ts: int
     end_ts: int
     weight_mode: str
+    fee_pct: float           # cost model the run used (echoed so a report is self-documenting)
+    slippage_pct: float
     avg_sleeve_maxdd: float  # mean per-coin drawdown — the diversification benchmark
     equity_curve: list[float] = field(default_factory=list)
 
@@ -185,7 +187,7 @@ def portfolio_backtest(
         net_pct=total_net_pnl / total_initial * 100.0 if total_initial else 0.0,
         maxdd_pct=_max_drawdown_pct(portfolio_curve), trades=total_trades,
         bars=n_bars, start_ts=timestamps[0], end_ts=timestamps[-1],
-        weight_mode=weight_mode,
+        weight_mode=weight_mode, fee_pct=bt.fee_pct, slippage_pct=bt.slippage_pct,
         avg_sleeve_maxdd=sum(maxdds) / len(maxdds) if maxdds else 0.0,
         equity_curve=portfolio_curve,
     )
@@ -204,6 +206,7 @@ def portfolio_report(result: PortfolioResult, label: str = "") -> str:
         f"# Trend index backtest — {label}".rstrip(),
         f"{len(r.sleeves)} coins, {r.weight_mode}-weight | "
         f"{r.bars} common daily bars ({_fmt_ts(r.start_ts)} → {_fmt_ts(r.end_ts)})",
+        f"fees {r.fee_pct}%/side, slippage {r.slippage_pct}%/fill | "
         "each sleeve runs Donchian breakout, fully deployed when long, cash otherwise",
         "",
         "coin   | alloc% | net%   | P&L     | contrib% | final% | maxdd% | trades",
