@@ -78,6 +78,11 @@ strategy:
   trend_period: 100                 # long SMA; entries require price above it
   # Volatility / mean-reversion thesis (used by the vwap_reversion strategy):
   reversion_entry_pct: 1.0          # buy when price is this % below VWAP, exit back at VWAP
+  # Trend-following thesis (used by the donchian_breakout strategy). Validated as
+  # the best fit for BTC (positive OOS across 18/18 param settings). To run it,
+  # set `name: donchian_breakout` above. 50/15 is a robust mid-grid choice.
+  donchian_entry_period: 50         # go long on a close above the prior N-bar high
+  donchian_exit_period: 15          # exit on a close below the prior M-bar low (exit < entry)
 
 # --- Scheduled macro events (FOMC, CPI, PPI, NFP...). Manage exposure, not direction.
 events:

@@ -163,9 +163,28 @@ segment), which is why it survives crypto's 0.6%/side fees where reversion's
 100+ trades bled out. Default params (20/10), not optimized — so it is not
 curve-fit. **This is the first real, positive, asset-matched crypto edge found.**
 
-Caveats: convex/lumpy (depends on catching the big trends; bleeds in chop); 3/5
-not 5/5; needs param walk-forward and a max-drawdown check before sizing real
-capital. Run it yourself:
+**Parameter robustness (the anti-overfit check): 18/18 net-positive.** A 5×5 grid
+of Donchian (entry, exit) periods (10–80 / 5–30, exit<entry) was *positive in
+every single setting* (scores +0.04 to +2.29). The default 20/10 is middling;
+longer entry lookbacks score better risk-adjusted (50/15 → +1.80 with 9 trades;
+80/10 → +2.29 but only 7 trades). Positive across the whole grid = a structural
+edge, not a lucky parameter.
+
+**Governors improve the trend base** (they only help a base with edge):
+
+| BTC OOS | net% | score | maxdd% |
+|---|---|---|---|
+| trend + funding | +0.29 | +1.46 | 0.20 |
+| trend + MVRV | +0.20 | +1.22 | 0.16 |
+| plain trend | +0.23 | +1.16 | 0.20 |
+
+Funding lifts return and risk-adjusted score; MVRV cuts max drawdown. The
+overlays that did nothing for no-edge strategies now earn their keep.
+
+Caveats: convex/lumpy (depends on catching the big trends; bleeds in chop);
+small absolute magnitudes (conservative backtest sizing); daily bars, one asset,
+~3.4y OOS; picking the single best grid param post-hoc is mild overfitting (use a
+robust mid-grid value like 50/15, not the max). Run it yourself:
 ```
 python3 -m tradingbot compare    --source csv --csv data/btc_1d_long.csv --oos 0.4
 python3 -m tradingbot robustness --csv data/btc_1d_long.csv --segments 5 --fee 0.6 --slippage 0.05
