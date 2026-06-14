@@ -99,6 +99,10 @@ def funding_experiments(base: StrategyConfig, series, overlay, gate: bool) -> li
             "reversion+funding",
             lambda: FundingFilteredStrategy(VwapReversionStrategy(c()), series, overlay, gate),
             "funding+reversion", single=False),
+        Experiment(
+            "trend+funding",
+            lambda: FundingFilteredStrategy(DonchianBreakoutStrategy(c()), series, overlay, gate),
+            "funding+trend", single=False),
     ]
 
 
@@ -119,7 +123,44 @@ def mvrv_experiments(base: StrategyConfig, series, overlay, gate: bool) -> list[
             "reversion+mvrv",
             lambda: MvrvFilteredStrategy(VwapReversionStrategy(c()), series, overlay, gate),
             "mvrv+reversion", single=False),
+        Experiment(
+            "trend+mvrv",
+            lambda: MvrvFilteredStrategy(DonchianBreakoutStrategy(c()), series, overlay, gate),
+            "mvrv+trend", single=False),
     ]
+
+
+def trend_sweep_report(
+    candles, base: StrategyConfig, entry_periods: list[int], exit_periods: list[int],
+    fee_pct: float, slippage_pct: float, oos_ratio: float, metric: Metric, label: str = "",
+) -> str:
+    """Run the Donchian trend strategy across a grid of (entry, exit) periods — is
+    the edge robust across parameters, or a lucky single setting? (exit < entry only.)"""
+    bt = BacktestConfig(fee_pct=fee_pct, slippage_pct=slippage_pct, oos_ratio=oos_ratio)
+    results = []
+    for ep in entry_periods:
+        for xp in exit_periods:
+            if xp >= ep:
+                continue
+            cfg = base.model_copy(update={"donchian_entry_period": ep, "donchian_exit_period": xp})
+            exp = Experiment("t", lambda c=cfg: DonchianBreakoutStrategy(c), "trend", single=False)
+            s = score_experiment(candles, exp, bt, metric)
+            results.append((ep, xp, s))
+    results.sort(key=lambda r: r[2].score, reverse=True)
+    pos = sum(1 for _, _, s in results if s.net_pct > 0)
+    lines = [
+        f"# Donchian param sweep — {label}",
+        f"fee {fee_pct}%/side, slippage {slippage_pct}%/fill | OOS {oos_ratio:.0%}",
+        "",
+        "entry | exit | net%    | score   | win% | trades",
+    ]
+    for ep, xp, s in results:
+        lines.append(f"{ep:5d} | {xp:4d} | {s.net_pct:+6.2f} | {s.score:+6.3f} | "
+                     f"{s.win_pct:4.0f} | {s.trades:4d}")
+    lines += ["", "### Read",
+              f"- net-positive in **{pos}/{len(results)}** parameter settings.",
+              "- A robust edge is positive across MOST of the grid, not at one lucky setting."]
+    return "\n".join(lines)
 
 
 def segment_report(

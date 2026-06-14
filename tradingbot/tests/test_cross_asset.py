@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from tradingbot.backtest.compare import cross_asset_report, segment_report
+from tradingbot.backtest.compare import (
+    cross_asset_report, segment_report, trend_sweep_report,
+)
 from tradingbot.backtest.metrics import METRICS
 from tradingbot.backtest.synthetic import synthetic_candles
 from tradingbot.config import StrategyConfig
@@ -33,3 +35,16 @@ def test_segment_report_splits_into_n() -> None:
     for i in range(5):
         assert f"\n{i:2d}  |" in report
     assert "net-positive in" in report
+
+
+def test_trend_sweep_skips_invalid_and_tabulates() -> None:
+    candles = synthetic_candles(n=1500, seed=4)
+    report = trend_sweep_report(
+        candles, StrategyConfig(), entry_periods=[20, 30], exit_periods=[10, 30],
+        fee_pct=0.1, slippage_pct=0.05, oos_ratio=0.4,
+        metric=METRICS["net_return_over_maxdd"], label="t",
+    )
+    assert "Donchian param sweep" in report
+    # exit>=entry combos (30/30) are skipped; valid combos present
+    assert "net-positive in" in report
+    assert "   20 |   10" in report
