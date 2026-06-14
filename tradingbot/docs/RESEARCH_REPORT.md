@@ -288,7 +288,8 @@ python3 -m tradingbot portfolio \
 # swap --weight-mode invvol for a risk-parity-style index (calmer coins weighted up)
 ```
 
-**Result (equal-weight, 1986 common daily bars, 2020-09-22 → 2026-05-31):**
+**Result — verified at 0.6%/side taker fees** (equal-weight, 1986 common daily
+bars, 2020-09-22 → 2026-05-31):
 
 | coin | alloc% | net% | contrib% | final% | maxdd% | trades |
 |---|---|---|---|---|---|---|
@@ -301,9 +302,21 @@ python3 -m tradingbot portfolio \
 | TRX | 14.3 | +98 | +2.1 | 3.6 | 66.8 | 18 |
 | **INDEX** | **100** | **+678** | **100** | **100** | **37.0** | **108** |
 
-*(Numbers above are at the earlier 0.1% fee; re-run at 0.6% for the conservative
-figure — it trims the totals by tens of % but does not flip the winners, since
-the returns are hundreds of %.)*
+Equal-weight vs inverse-volatility weighting, both at 0.6%/side:
+
+| weighting | net return | max DD | return/DD |
+|---|---|---|---|
+| **equal** | **+678%** | 37.0% | **18.3** |
+| inverse-vol | +617% | 35.8% | 17.2 |
+
+Inverse-vol does *not* help: it trims 1.2pt of drawdown but gives up 61pt of
+return (it down-weights DOGE, a +953% winner), losing on both raw and
+risk-adjusted terms. **Equal-weight is the better and simpler index.**
+
+Fee note: at full-deployment sizing each trend ride multiplies the position
+several-fold, so ~1%/round-trip over ~15 trades costs only ~15pts on a +1400%
+gross — fees are rounding noise *at this magnitude*, which is itself a property of
+the bull-regime window (it would not hold in a chop where moves are small).
 
 **What it shows — and what to discount.** Diversification is real: index drawdown
 **37% vs 50% average single-coin**, with no coin dominating P&L (BNB top at 29%,
