@@ -19,7 +19,8 @@ def test_cross_asset_report_tabulates_each_asset() -> None:
     assert "AAA" in report and "BBB" in report
     # each asset row carries its own fee column
     assert "0.60" in report and "0.01" in report
-    assert "reversion wins?" in report
+    assert "best thesis" in report
+    assert "trend net%/score" in report
 
 
 def test_segment_report_splits_into_n() -> None:

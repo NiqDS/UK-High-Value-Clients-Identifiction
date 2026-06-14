@@ -180,6 +180,12 @@ class StrategyConfig(BaseModel):
     # --- volatility / mean-reversion thesis (vwap_reversion strategy) ------
     reversion_entry_pct: float = Field(default=1.0, gt=0.0)  # buy when this % below VWAP
 
+    # --- trend-following thesis (donchian_breakout strategy) ---------------
+    # BTC trends, so this rides breakouts instead of fading them: go long when
+    # close breaks above the prior N-bar high; exit when it breaks the M-bar low.
+    donchian_entry_period: int = Field(default=20, gt=1)
+    donchian_exit_period: int = Field(default=10, gt=1)
+
     @model_validator(mode="after")
     def _check_sizing(self) -> "StrategyConfig":
         if self.vwap_size_min_mult > self.vwap_size_max_mult:

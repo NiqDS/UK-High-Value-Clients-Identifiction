@@ -1,13 +1,15 @@
-"""Pluggable strategies. Ship one reference strategy (SMA crossover)."""
+"""Pluggable strategies: SMA crossover, VWAP mean-reversion, Donchian breakout."""
 
 from ..config import StrategyConfig
 from .base import MarketData, Strategy
 from .sma import SmaCrossoverStrategy
+from .trend import DonchianBreakoutStrategy
 from .vwap_reversion import VwapReversionStrategy
 
 _REGISTRY: dict[str, type[Strategy]] = {
     "sma_crossover": SmaCrossoverStrategy,
     "vwap_reversion": VwapReversionStrategy,
+    "donchian_breakout": DonchianBreakoutStrategy,
 }
 
 
@@ -19,4 +21,4 @@ def build_strategy(config: StrategyConfig) -> Strategy:
 
 
 __all__ = ["MarketData", "Strategy", "SmaCrossoverStrategy", "VwapReversionStrategy",
-           "build_strategy"]
+           "DonchianBreakoutStrategy", "build_strategy"]

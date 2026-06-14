@@ -18,6 +18,7 @@ from typing import Callable
 from ..config import StrategyConfig
 from ..strategy.base import Strategy
 from ..strategy.sma import SmaCrossoverStrategy
+from ..strategy.trend import DonchianBreakoutStrategy
 from ..strategy.vwap_reversion import VwapReversionStrategy
 from .engine import Backtester, BacktestConfig
 from .metrics import Metric
@@ -74,6 +75,9 @@ def default_experiments(base: StrategyConfig) -> list[Experiment]:
         Experiment("H2_vwap_reversion",
                    lambda: VwapReversionStrategy(c()),
                    "mean_reversion (thesis)", single=False),
+        Experiment("H3_donchian_trend",
+                   lambda: DonchianBreakoutStrategy(c()),
+                   "trend_breakout (thesis)", single=False),
     ]
 
 
@@ -127,28 +131,28 @@ def segment_report(
     lucky period? (Each segment is scored standalone; no parameters are learned.)"""
     bt = BacktestConfig(fee_pct=fee_pct, slippage_pct=slippage_pct)
     seg = max(1, len(candles) // n_segments)
-    base_f = lambda: SmaCrossoverStrategy(base.model_copy(update={"vwap_filter_enabled": False}))
     rev_f = lambda: VwapReversionStrategy(base)
+    trend_f = lambda: DonchianBreakoutStrategy(base)
     lines = [
         f"# Robustness across {n_segments} sequential segments — {label}",
         f"fee {fee_pct}%/side, slippage {slippage_pct}%/fill | each segment scored standalone",
         "",
-        "seg |  bars | baseline net% / score (trades) | reversion net% / score (trades)",
+        "seg |  bars | reversion net% / score (trades) | trend net% / score (trades)",
     ]
-    rev_pos = rev_win = 0
+    rev_pos = trend_pos = 0
     for i in range(n_segments):
         s = candles[i * seg:] if i == n_segments - 1 else candles[i * seg:(i + 1) * seg]
-        rb = Backtester(bt).run(s, base_f())
         rr = Backtester(bt).run(s, rev_f())
-        bs, rs = metric(rb), metric(rr)
+        rt = Backtester(bt).run(s, trend_f())
+        rs, ts = metric(rr), metric(rt)
         rev_pos += rr.net_return_pct > 0
-        rev_win += rs > bs and rr.net_return_pct > 0
+        trend_pos += rt.net_return_pct > 0
         lines.append(
-            f"{i:2d}  | {len(s):5d} | {rb.net_return_pct:+6.2f} / {bs:+6.3f} ({rb.num_trades:3d}) "
-            f"      | {rr.net_return_pct:+6.2f} / {rs:+6.3f} ({rr.num_trades:3d})")
+            f"{i:2d}  | {len(s):5d} | {rr.net_return_pct:+6.2f} / {rs:+6.3f} ({rr.num_trades:3d}) "
+            f"      | {rt.net_return_pct:+6.2f} / {ts:+6.3f} ({rt.num_trades:3d})")
     lines += ["", "### Read",
               f"- mean-reversion net-positive in **{rev_pos}/{n_segments}** segments; "
-              f"beats baseline in **{rev_win}/{n_segments}**.",
+              f"trend-breakout net-positive in **{trend_pos}/{n_segments}**.",
               "- A real edge is positive in MOST segments. Concentrated in one => fragile/lucky."]
     return "\n".join(lines)
 
@@ -172,25 +176,28 @@ def cross_asset_report(
         "# Cross-asset comparison (out-of-sample)",
         f"metric: net-of-fees return / max drawdown | OOS fraction: {oos_ratio:.0%}",
         "",
-        "asset      | bars  | fee%  | baseline net% / score   | reversion net% / score  | reversion wins?",
+        "asset      | bars  | fee%  | reversion net%/score(t) | trend net%/score(t)     | best thesis",
     ]
-    rows = []
     for label, candles, fee in assets:
         bt = BacktestConfig(fee_pct=fee, slippage_pct=slippage_pct, oos_ratio=oos_ratio)
-        exps = default_experiments(base)
-        by = {s.name: s for s in (score_experiment(candles, e, bt, metric) for e in exps)}
-        b, r = by.get(BASELINE), by.get("H2_vwap_reversion")
-        wins = "YES" if (r and b and r.score > b.score and r.net_pct > 0) else "no"
-        rows.append((label, len(candles), fee, b, r, wins))
+        by = {s.name: s for s in (score_experiment(candles, e, bt, metric)
+                                  for e in default_experiments(base))}
+        r, t = by.get("H2_vwap_reversion"), by.get("H3_donchian_trend")
+        # best of the two theses that is also net-positive
+        best = "neither"
+        cands = [(n, s) for n, s in (("reversion", r), ("trend", t)) if s and s.net_pct > 0]
+        if cands:
+            best = max(cands, key=lambda x: x[1].score)[0]
         lines.append(
             f"{label:10s} | {len(candles):5d} | {fee:4.2f}  | "
-            f"{(b.net_pct if b else 0):+6.2f} / {(b.score if b else 0):+6.3f} ({b.trades if b else 0:3d}t) | "
-            f"{(r.net_pct if r else 0):+6.2f} / {(r.score if r else 0):+6.3f} ({r.trades if r else 0:3d}t) | {wins}"
+            f"{(r.net_pct if r else 0):+6.2f} / {(r.score if r else 0):+6.3f} ({r.trades if r else 0:3d}) | "
+            f"{(t.net_pct if t else 0):+6.2f} / {(t.score if t else 0):+6.3f} ({t.trades if t else 0:3d}) | {best}"
         )
     lines += ["", "### Read",
-              "- 'reversion wins?' = mean-reversion beats the directional baseline AND is net-positive OOS.",
-              "- The thesis (volatility/mean-reversion) is expected to fit mean-reverting, lower-vol "
-              "assets (equity indices) and fail on trending, high-vol ones (crypto)."]
+              "- 'best thesis' = whichever of mean-reversion / trend-breakout is net-positive OOS "
+              "with the higher risk-adjusted score (or 'neither').",
+              "- Expectation: reversion fits mean-reverting low-vol assets (equity indices); "
+              "trend fits trending high-vol assets (crypto)."]
     return "\n".join(lines)
 
 
