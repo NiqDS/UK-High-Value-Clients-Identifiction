@@ -288,39 +288,45 @@ python3 -m tradingbot portfolio \
 # swap --weight-mode invvol for a risk-parity-style index (calmer coins weighted up)
 ```
 
-**Result — verified at 0.6%/side taker fees** (equal-weight, 1986 common daily
-bars, 2020-09-22 → 2026-05-31):
+**Result — verified at 0.6%/side taker fees, leverage-free** (equal-weight, 1986
+common daily bars, 2020-09-22 → 2026-05-31):
 
-| coin | alloc% | net% | contrib% | final% | maxdd% | trades |
+| coin | alloc% | net% | buy&hold% | expo% | maxdd% | trades |
 |---|---|---|---|---|---|---|
-| BNB | 14.3 | +1394 | +29.4 | 27.4 | 37.8 | 15 |
-| ADA | 14.3 | +993 | +20.9 | 20.1 | 50.4 | 11 |
-| DOGE | 14.3 | +953 | +20.1 | 19.3 | 57.7 | 17 |
-| AVAX | 14.3 | +631 | +13.3 | 13.4 | 58.7 | 14 |
-| ETH | 14.3 | +467 | +9.8 | 10.4 | 45.5 | 16 |
-| BTC | 14.3 | +210 | +4.4 | 5.7 | 34.4 | 17 |
-| TRX | 14.3 | +98 | +2.1 | 3.6 | 66.8 | 18 |
-| **INDEX** | **100** | **+678** | **100** | **100** | **37.0** | **108** |
+| BNB | 14.3 | +1107 | +2855 | 37 | 36.9 | 15 |
+| ADA | 14.3 | +987 | +189 | 26 | 50.4 | 11 |
+| DOGE | 14.3 | +953 | +3699 | 28 | 57.7 | 17 |
+| AVAX | 14.3 | +629 | +69 | 23 | 58.7 | 14 |
+| ETH | 14.3 | +465 | +483 | 37 | 45.5 | 16 |
+| BTC | 14.3 | +209 | +600 | 38 | 34.4 | 17 |
+| TRX | 14.3 | +82 | +1306 | 38 | 66.2 | 18 |
+| **INDEX** | **100** | **+633** | +1314 | 32 | **37.7** | **108** |
+
+(These are the cash-capped, no-leverage figures: an earlier run read +678% but
+~45pts of that came from BNB implicitly re-leveraging a post-loss re-entry; the
+engine now caps every entry at available cash, so +633% is the honest number.
+Drawdown barely moved (37.0→37.7), confirming the leverage flattered *return*, not
+risk.)
 
 Equal-weight vs inverse-volatility weighting, both at 0.6%/side:
 
 | weighting | net return | max DD | return/DD |
 |---|---|---|---|
-| **equal** | **+678%** | 37.0% | **18.3** |
-| inverse-vol | +617% | 35.8% | 17.2 |
+| **equal** | **+633%** | 37.7% | **16.8** |
+| inverse-vol | ~+617% | 35.8% | ~16.4 |
 
-Inverse-vol does *not* help: it trims 1.2pt of drawdown but gives up 61pt of
-return (it down-weights DOGE, a +953% winner), losing on both raw and
-risk-adjusted terms. **Equal-weight is the better and simpler index.**
+Inverse-vol does *not* help: it trims ~2pt of drawdown but gives up return (it
+down-weights DOGE, a +953% winner), losing on both raw and risk-adjusted terms.
+**Equal-weight is the better and simpler index.**
 
 Fee note: at full-deployment sizing each trend ride multiplies the position
-several-fold, so ~1%/round-trip over ~15 trades costs only ~15pts on a +1400%
+several-fold, so ~1%/round-trip over ~15 trades costs only ~15pts on a multi-100%
 gross — fees are rounding noise *at this magnitude*, which is itself a property of
 the bull-regime window (it would not hold in a chop where moves are small).
 
 **What it shows — and what to discount.** Diversification is real: index drawdown
-**37% vs 50% average single-coin**, with no coin dominating P&L (BNB top at 29%,
-TRX bottom at 2%) — the basket isn't a one-coin bet. **But the headline +678% is
+**37.7% vs 50% average single-coin**, with no coin dominating returns (BNB top,
+TRX bottom) — the basket isn't a one-coin bet. **But the headline +633% is
 not a forecast:** (1) the window spans crypto's two largest bull runs (2020–21,
 2023–24) — trend-following's best-case regime; (2) the constituents are the
 *survivors* (today's top majors) — a real-time system would also have bought the
@@ -373,16 +379,16 @@ matters:**
 
 | full-index metric | no gate | 200d gate |
 |---|---|---|
-| net return | **+678%** | +94% |
-| max drawdown | **37.0%** | 49.3% |
-| return / maxdd | **18.3** | 1.9 |
+| net return | **+633%** | +94% |
+| max drawdown | **37.7%** | 49.3% |
+| return / maxdd | **16.8** | 1.9 |
 | time-in-market | 32% | 23% |
 
 It cut return by **86%** *and raised* drawdown. Why: trend-following's edge is a
 **convex right tail** — the biggest gains come at the *start* of a new uptrend,
 when price first breaks out from a bottom while the 200d SMA still sits far
 overhead. The gate blocks exactly those early entries, so you buy late into
-mature, reversal-prone trends; every coin's return collapsed (BNB +1394%→+111%,
+mature, reversal-prone trends; every coin's return collapsed (BNB +1107%→+111%,
 ADA +993%→+90%, DOGE +953%→+36%). Drawdown got *worse* because the few allowed
 trades concentrate into fewer, larger, later positions (lumpier timing). **Lesson
 (same as the governors): never gate a strategy whose edge is early entries with a
