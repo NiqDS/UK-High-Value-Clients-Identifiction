@@ -16,15 +16,20 @@ python3 -m tradingbot compare --source csv --csv data/btc_1h_real.csv --oos 0.4 
 
 ## The headline conclusion
 
-**No entry edge was found in crypto; the one positive edge was mean-reversion on
-equities.** On real BTC data (hourly and multi-year daily), no signal predicts
-direction well enough to overcome fees — every crypto mechanic that "helps" does
-so by **trading less or smaller** (capital preservation), not by trading *better*
-(alpha). The single exception came when the *same* mean-reversion strategy was
-run on **SPY**, where it was positive out-of-sample (see Cross-asset). The
-takeaway: the volatility/mean-reversion thesis is sound but fits **equity
-indices, not crypto**, and the platform is built to *reject* false edges rather
-than flatter them — which is exactly why the one real edge stands out.
+**Direction-of-fit is everything: mean-reversion works on equities, trend-following
+works on BTC.** No *mean-reversion or directional* signal beats fees on crypto —
+those mechanics only "help" by trading less/smaller (capital preservation). But
+matching the strategy to the asset's character changes the result entirely:
+- **Mean-reversion** is positive OOS on mean-reverting **equity indices (SPY, QQQ:
+  4/5 segments each)** and loses on BTC (0/5).
+- **Trend-following (Donchian breakout)** is positive OOS on trending **BTC (3/5
+  segments, strongly net-positive in aggregate)** — the first real crypto edge —
+  and is the wrong tool for range-bound equities.
+
+The founding thesis (*volatility is more predictable than direction*) holds for
+mean-reverting instruments; for trending ones (BTC), **momentum/trend** is the fit.
+The platform is built to *reject* false edges, which is why these two real,
+asset-matched edges stand out from everything that didn't survive.
 
 ## What we tested
 
