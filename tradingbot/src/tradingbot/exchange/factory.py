@@ -46,9 +46,23 @@ def build_adapter(exchange_cfg: ExchangeConfig, secrets: Secrets) -> ExchangeAda
     client = getattr(ccxt, name)(params)
 
     if exchange_cfg.sandbox:
+        # Not every venue ships a ccxt testnet URL (e.g. Coinbase, Kraken spot).
+        # ccxt then raises a cryptic TypeError deep in clone(); turn that into a
+        # clear, actionable error instead.
+        test_url = (getattr(client, "urls", {}) or {}).get("test")
+        if not test_url:
+            raise ValueError(
+                f"Exchange {name!r} has no ccxt sandbox/testnet endpoint. Either set "
+                f"exchange.sandbox: false and use app.dry_run: true (paper fills on LIVE "
+                f"market data — no real orders), or choose a venue with a testnet "
+                f"(e.g. binance) for sandbox integration testing."
+            )
         client.set_sandbox_mode(True)
         logger.info("Exchange %s: SANDBOX mode enabled", name)
     else:
-        logger.warning("Exchange %s: LIVE mode — real funds at risk", name)
+        # LIVE endpoint = real market data. Whether ORDERS are real depends on
+        # app.dry_run (paper uses the PaperBroker; no orders reach the exchange).
+        logger.warning("Exchange %s: LIVE endpoint (real market data) — order routing "
+                       "depends on app.dry_run", name)
 
     return ExchangeAdapter(client)
