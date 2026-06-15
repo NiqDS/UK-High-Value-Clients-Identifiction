@@ -45,6 +45,9 @@ def build_adapter(exchange_cfg: ExchangeConfig, secrets: Secrets) -> ExchangeAda
 
     client = getattr(ccxt, name)(params)
 
+    if exchange_cfg.use_threaded_dns:
+        _use_os_resolver(client)
+
     if exchange_cfg.sandbox:
         # Not every venue ships a ccxt testnet URL (e.g. Coinbase, Kraken spot).
         # ccxt then raises a cryptic TypeError deep in clone(); turn that into a
@@ -66,3 +69,29 @@ def build_adapter(exchange_cfg: ExchangeConfig, secrets: Secrets) -> ExchangeAda
                        "depends on app.dry_run", name)
 
     return ExchangeAdapter(client)
+
+
+def _use_os_resolver(client) -> None:
+    """Make ccxt's aiohttp session resolve DNS via the OS (threaded getaddrinfo)
+    instead of aiodns/c-ares. aiodns fails on some setups — notably macOS and
+    fresh CPython builds — with "Could not contact DNS servers" even though the
+    system resolver works fine (curl/ping succeed). Injecting a session with the
+    ThreadedResolver sidesteps that. No-op outside a running event loop (e.g. unit
+    tests that only construct the adapter) — ccxt then builds its own session."""
+    try:
+        import asyncio
+
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return  # no loop yet; nothing to attach a session to
+
+    try:
+        import aiohttp
+
+        connector = aiohttp.TCPConnector(
+            resolver=aiohttp.ThreadedResolver(), ttl_dns_cache=300, limit=0,
+        )
+        client.session = aiohttp.ClientSession(connector=connector, trust_env=True)
+        logger.info("Using OS (threaded) DNS resolver for %s", client.id)
+    except Exception:  # pragma: no cover - defensive; fall back to ccxt's default
+        logger.exception("could not install threaded DNS resolver; using ccxt default")

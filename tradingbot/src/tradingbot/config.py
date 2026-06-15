@@ -61,6 +61,8 @@ class ExchangeConfig(BaseModel):
     symbols_allowlist: list[str] = Field(default_factory=lambda: ["BTC/USD", "ETH/USD"])
     enable_rate_limit: bool = True
     request_timeout_ms: int = Field(default=20000, gt=0)
+    use_threaded_dns: bool = True   # use the OS resolver, not aiodns (avoids the
+                                    # "Could not contact DNS servers" failure on macOS)
 
 
 class RiskConfig(BaseModel):
@@ -276,6 +278,11 @@ class AppConfig(BaseModel):
     max_consecutive_failures: int = Field(default=3, gt=0)
     health_recovery_samples: int = Field(default=3, gt=0)
     cancel_orders_on_suspend: bool = True
+    # Paper sizing: when there are no exchange credentials (so no real balance to
+    # read), size the paper run off this simulated equity instead of the synthetic
+    # floor*3 fallback. Set it to your intended real capital (e.g. 500) so paper
+    # sleeve sizes match what you'll trade live. 0 = use the floor*3 fallback.
+    paper_equity: float = Field(default=0.0, ge=0.0)
 
 
 class Config(BaseModel):

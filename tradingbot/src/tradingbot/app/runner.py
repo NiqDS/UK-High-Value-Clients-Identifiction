@@ -102,9 +102,11 @@ class TradingRunner:
                 bal = await self.adapter.fetch_balance()
                 return bal.total(quote), bal.free(quote)
             except Exception:
-                logger.exception("fetch_balance failed; using synthetic equity")
-        synthetic = self.cfg.risk.floor_quote * 3
-        return synthetic, synthetic
+                logger.exception("fetch_balance failed; using simulated equity")
+        # No credentials (paper run): size off the configured paper_equity so sleeve
+        # sizes match the intended real capital; fall back to floor*3 if unset.
+        simulated = self.cfg.app.paper_equity or self.cfg.risk.floor_quote * 3
+        return simulated, simulated
 
     # -- one pass for one symbol -------------------------------------------
     async def run_once(self, symbol: str, now: datetime | None = None) -> list[PipelineResult]:

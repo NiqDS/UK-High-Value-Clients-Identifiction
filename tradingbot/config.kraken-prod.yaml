@@ -33,6 +33,8 @@ exchange:
     - TRX/GBP
   enable_rate_limit: true
   request_timeout_ms: 20000
+  use_threaded_dns: true     # OS resolver, not aiodns (fixes macOS "Could not
+                             # contact DNS servers" on api.kraken.com)
 
 # --- Hard risk layer. Sized for ~£500 across 7 equal sleeves. ---------------
 # Risk model for THIS strategy = sleeve sizing (~£60/coin) + max 7 positions +
@@ -135,6 +137,7 @@ reporting:
 # --- App / runtime ---------------------------------------------------------
 app:
   dry_run: true                     # PAPER — simulated fills, NO real orders. START HERE.
+  paper_equity: 500.0               # size paper sleeves off £500 (no key/balance needed)
   trading_enabled: true
   log_level: INFO
   log_json: false

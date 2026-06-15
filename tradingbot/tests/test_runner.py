@@ -99,6 +99,21 @@ async def test_tp_stop_exit_emission(tmp_path) -> None:
     assert runner._tp_stop_exits("BTC/USD", last=100.0) == []
 
 
+async def test_paper_equity_overrides_synthetic_fallback(tmp_path) -> None:
+    # no credentials -> paper run sizes off app.paper_equity when set
+    runner, _, _ = build(tmp_path, BuyOnceStrategy())
+    runner.cfg.app.paper_equity = 500.0
+    equity, free = await runner._equity_free()
+    assert equity == pytest.approx(500.0) and free == pytest.approx(500.0)
+
+
+async def test_paper_equity_unset_uses_floor_fallback(tmp_path) -> None:
+    runner, _, _ = build(tmp_path, BuyOnceStrategy())
+    runner.cfg.app.paper_equity = 0.0  # unset -> floor*3 fallback
+    equity, _ = await runner._equity_free()
+    assert equity == pytest.approx(runner.cfg.risk.floor_quote * 3)
+
+
 async def test_weekly_report_reset_and_market_returns(tmp_path) -> None:
     runner, _, _ = build(tmp_path, BuyOnceStrategy())
     runner._week_first_price = {"BTC/USD": 100.0}
