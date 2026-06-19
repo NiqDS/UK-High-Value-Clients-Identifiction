@@ -63,6 +63,9 @@ class ExchangeConfig(BaseModel):
     request_timeout_ms: int = Field(default=20000, gt=0)
     use_threaded_dns: bool = True   # use the OS resolver, not aiodns (avoids the
                                     # "Could not contact DNS servers" failure on macOS)
+    options: dict[str, Any] = Field(default_factory=dict)  # extra ccxt options passed
+                                    # straight through (e.g. {"defaultType": "spot"} for
+                                    # Bybit/OKX so orders route to spot, not derivatives)
 
 
 class RiskConfig(BaseModel):

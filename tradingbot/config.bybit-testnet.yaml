@@ -1,0 +1,146 @@
+# =============================================================================
+# TESTNET config — Bybit / 7-coin daily Donchian trend basket (USDT-quoted)
+# -----------------------------------------------------------------------------
+# Same validated strategy as config.kraken-prod.yaml, but on Bybit's TESTNET so
+# you can exercise the full LIVE order path with FAKE money before risking real
+# funds. Bybit (unlike Kraken spot) ships a real testnet, so set_sandbox_mode
+# works and orders actually route to testnet.bybit.com.
+#
+# SETUP (one-time):
+#   1. Create a Bybit *testnet* account at https://testnet.bybit.com
+#   2. Fund it from the testnet faucet (free test USDT).
+#   3. Create a testnet API key with TRADE + READ permissions, NO withdrawal.
+#   4. Put the key/secret in .env:  EXCHANGE_API_KEY=...  EXCHANGE_API_SECRET=...
+#
+# RUN (places REAL orders on the testnet with fake money):
+#   python3 -m tradingbot --config config.bybit-testnet.yaml run
+#
+# No keys yet / just want a connectivity + paper check first?
+#   set app.dry_run: true below -> simulated fills against live testnet data
+#   (uses app.paper_equity for sizing; no key needed for public data).
+#
+# Capital mirrors the real £500 plan as ~640 USDT across 7 equal ~85-USDT sleeves.
+# Note: USDT-quoted, so your P&L is in USDT (USD-pegged) — a small GBP/USD FX
+# layer vs the GBP plan. USDT pairs are very liquid (tight spreads, good fills).
+# =============================================================================
+
+exchange:
+  name: bybit
+  sandbox: true              # TESTNET endpoint (testnet.bybit.com) — fake money
+  quote_currency: USDT       # Bybit spot is USDT-quoted (no GBP pairs)
+  symbols_allowlist:
+    - BTC/USDT
+    - ETH/USDT
+    - BNB/USDT
+    - ADA/USDT
+    - AVAX/USDT
+    - DOGE/USDT
+    - TRX/USDT
+  enable_rate_limit: true
+  request_timeout_ms: 20000
+  use_threaded_dns: true     # OS resolver (robust DNS; harmless on any platform)
+  options:
+    defaultType: spot        # route to SPOT markets, not derivatives (UK = spot only)
+
+# --- Hard risk layer. ~640 USDT across 7 equal sleeves (~85 USDT each). ------
+# Absolute notional caps keep each sleeve ~85 USDT even if the testnet faucet
+# credits a large balance, so the test mirrors the real £500 plan regardless.
+risk:
+  floor_quote: 30.0
+  floor_buffer_quote: 15.0
+  min_notional_per_trade_quote: 5.0    # verify Bybit's per-symbol spot minimum
+  max_notional_per_trade_quote: 95.0   # caps a sleeve (~85) regardless of testnet balance
+  max_notional_per_trade_pct_equity: 14.0
+  per_trade_risk_pct: 5.0           # loose on purpose — Donchian stops are wide channel lows
+  max_open_positions: 7             # one sleeve per coin
+  max_concurrent_open_orders: 8
+  max_trades_per_day: 14
+  max_daily_traded_notional_quote: 640.0
+  max_daily_loss_quote: 80.0        # ~12.5% of the book — daily circuit breaker
+  daily_reset_utc_hour: 0
+
+# --- Fees: Bybit spot ~0.10% maker/taker (pull real tier once keyed). -------
+fees:
+  maker_fee_pct: 0.10
+  taker_fee_pct: 0.10
+  pull_fee_tiers_from_exchange: true
+  round_trip_fee_safety_margin_pct: 0.20
+  maker_first: true
+  allow_taker_fallback: true        # allow taking liquidity for breakout entry / guaranteed exit
+  maker_offset_pct: 0.05
+  max_spread_pct: 0.30              # USDT pairs are liquid — tight spreads
+  max_slippage_pct: 0.20
+  require_take_profit: false        # CRITICAL: trend rider has no TP (exits on the channel)
+
+# --- The validated strategy: daily Donchian breakout. ----------------------
+strategy:
+  name: donchian_breakout
+  timeframe: 1d
+  ohlcv_limit: 120
+  target_notional_quote: 85.0       # per-sleeve deployment (~640 USDT / 7)
+  take_profit_pct: 1.5              # unused by donchian — kept valid for the loader
+  stop_loss_pct: 1.0
+  vwap_filter_enabled: false
+  donchian_entry_period: 50
+  donchian_exit_period: 15
+  trend_filter_enabled: false       # 200d-SMA gate RULED OUT (see RESEARCH_REPORT)
+
+# --- Macro-event exposure windows. Pause entries, don't trade direction. ----
+events:
+  enabled: true
+  timezone: UTC
+  pre_event_window_minutes: 60
+  post_event_window_minutes: 30
+  pause_entries: true
+  reduce_size_pct: 50.0
+  widen_maker_offset_pct: 0.10
+  tighten_stops: true
+  calendar: []
+  calendar_csv: ""
+  include_halvings: true
+
+# --- Kill switch: intraday-tuned; on DAILY bars it observes ~30 daily candles.
+# Widened so normal big trend days (the edge) don't halt it. REVIEW in testing.
+kill_switch:
+  enabled: true
+  rolling_window_minutes: 30
+  price_velocity_sigma: 6.0
+  volume_spike_sigma: 6.0
+  cooldown_minutes: 1440
+  pull_resting_orders: true
+
+regime:
+  enabled: false
+funding:
+  enabled: false
+mvrv:
+  enabled: false
+
+# --- Telegram approval. Approval for EVERY trade (good while validating). ----
+# Without a token configured, the runner auto-approves and warns (fine on testnet).
+telegram:
+  enabled: true
+  approval_threshold_quote: 0.0
+  approval_timeout_seconds: 300
+  allowed_chat_ids: []
+
+reporting:
+  weekly_enabled: true
+  weekly_day: 0
+  weekly_hour_utc: 8
+  email_enabled: false
+
+# --- App / runtime ---------------------------------------------------------
+app:
+  dry_run: false                    # TESTNET: place REAL orders with FAKE money (the point
+                                    # of a testnet). No keys yet? set this true for paper.
+  paper_equity: 640.0               # used only if running without credentials (dry_run paper)
+  trading_enabled: true
+  log_level: INFO
+  log_json: false
+  db_url: "sqlite:///data/tradingbot_bybit_testnet.db"
+  heartbeat_interval_seconds: 3600  # hourly poll — ample for a daily strategy
+  max_api_latency_ms: 3000
+  max_consecutive_failures: 3
+  health_recovery_samples: 3
+  cancel_orders_on_suspend: true

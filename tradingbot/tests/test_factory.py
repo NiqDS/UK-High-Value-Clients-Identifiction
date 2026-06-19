@@ -31,3 +31,12 @@ def test_sandbox_on_venue_with_testnet_builds() -> None:
     cfg = ExchangeConfig(name="binance", sandbox=True, quote_currency="USDT")
     adapter = build_adapter(cfg, _SECRETS)
     assert adapter is not None
+
+
+def test_bybit_testnet_with_spot_options_builds() -> None:
+    # the Bybit testnet path: sandbox + ccxt options passthrough (defaultType spot)
+    cfg = ExchangeConfig(name="bybit", sandbox=True, quote_currency="USDT",
+                         options={"defaultType": "spot"})
+    adapter = build_adapter(cfg, _SECRETS)
+    assert adapter is not None
+    assert adapter._client.options.get("defaultType") == "spot"

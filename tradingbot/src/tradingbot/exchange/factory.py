@@ -42,6 +42,10 @@ def build_adapter(exchange_cfg: ExchangeConfig, secrets: Secrets) -> ExchangeAda
     }
     if api_password:
         params["password"] = api_password
+    if exchange_cfg.options:
+        # pass-through ccxt options (e.g. {"defaultType": "spot"} so Bybit/OKX
+        # route to the spot market, not derivatives)
+        params["options"] = dict(exchange_cfg.options)
 
     client = getattr(ccxt, name)(params)
 
