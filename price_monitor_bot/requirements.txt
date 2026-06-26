@@ -4,3 +4,7 @@ beautifulsoup4>=4.12,<5
 APScheduler>=3.10,<4
 aiosqlite>=0.19,<0.21
 python-dotenv>=1.0,<2
+# Optional fallback scraper for JavaScript-rendered pages.
+# After installing, run `playwright install chromium` to download the browser
+# (or set PLAYWRIGHT_EXECUTABLE_PATH to a pre-installed Chromium).
+playwright>=1.40,<2

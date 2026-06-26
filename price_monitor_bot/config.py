@@ -18,6 +18,13 @@ def _get_int(name: str, default: int) -> int:
         return default
 
 
+def _get_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 # --- Telegram ---------------------------------------------------------------
 TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
@@ -51,6 +58,20 @@ USER_AGENTS: list[str] = [
     "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) "
     "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1",
 ]
+
+# --- Playwright fallback (for JavaScript-rendered pages) --------------------
+# When the static httpx + BeautifulSoup pass finds no price, optionally fall
+# back to rendering the page in a headless browser via Playwright.
+USE_PLAYWRIGHT_FALLBACK: bool = _get_bool("USE_PLAYWRIGHT_FALLBACK", True)
+
+# Optional explicit path to a Chromium executable. Leave empty to let
+# Playwright locate its own managed browser. Some managed environments ship a
+# pre-installed Chromium (e.g. /opt/pw-browsers/chromium) — set this to that
+# path to avoid downloading browsers.
+PLAYWRIGHT_EXECUTABLE_PATH: str = os.getenv("PLAYWRIGHT_EXECUTABLE_PATH", "").strip()
+
+# How long (seconds) to allow a single rendered page load.
+PLAYWRIGHT_TIMEOUT_SECONDS: int = _get_int("PLAYWRIGHT_TIMEOUT_SECONDS", 30)
 
 
 def validate() -> None:

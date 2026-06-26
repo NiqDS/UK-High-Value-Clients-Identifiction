@@ -19,7 +19,12 @@ from typing import Optional
 import httpx
 from bs4 import BeautifulSoup
 
-from config import REQUEST_TIMEOUT_SECONDS, USER_AGENTS
+import playwright_scraper
+from config import (
+    REQUEST_TIMEOUT_SECONDS,
+    USE_PLAYWRIGHT_FALLBACK,
+    USER_AGENTS,
+)
 from models import ScrapeResult
 
 logger = logging.getLogger(__name__)
@@ -265,7 +270,31 @@ def extract_price(html: str) -> Optional[ScrapeResult]:
 async def scrape(url: str) -> Optional[ScrapeResult]:
     """Fetch ``url`` and extract a price. Returns None if no price found.
 
-    Raises ScrapeError if the page itself could not be fetched.
+    First tries a fast static fetch (httpx + BeautifulSoup). If that finds no
+    price and the Playwright fallback is enabled and available, re-fetches the
+    page in a headless browser to handle JavaScript-rendered prices.
+
+    Raises ScrapeError if the static fetch itself fails; if static fetch fails
+    but a Playwright render succeeds, the rendered result is used instead.
     """
-    html = await fetch_html(url)
-    return extract_price(html)
+    static_error: Optional[ScrapeError] = None
+    try:
+        html = await fetch_html(url)
+        result = extract_price(html)
+        if result is not None:
+            return result
+    except ScrapeError as exc:
+        static_error = exc
+        logger.info("Static fetch failed for %s: %s", url, exc)
+
+    # Static pass found no price (or the page blocked us) — try rendering.
+    if USE_PLAYWRIGHT_FALLBACK and playwright_scraper.is_available():
+        logger.info("Falling back to Playwright render for %s", url)
+        rendered = await playwright_scraper.fetch_rendered_html(url)
+        if rendered is not None:
+            return extract_price(rendered)
+
+    # No price anywhere. Surface the original fetch error if there was one.
+    if static_error is not None:
+        raise static_error
+    return None

@@ -11,6 +11,8 @@ whenever a monitored price changes.
 - Multi-strategy price extraction: JSON-LD (`schema.org/Product`), Open Graph /
   product meta tags, `price`/`cost`/`amount` elements, and a currency-symbol
   text sweep.
+- Optional **Playwright fallback** that renders JavaScript-heavy pages in
+  headless Chromium when the static scraper finds no price.
 - SQLite persistence (`aiosqlite`) — monitors survive restarts and jobs are
   reloaded on startup.
 - User-agent rotation, retry-once-then-skip error handling, and a warning after
@@ -38,8 +40,14 @@ pip install -r requirements.txt
 cp .env.example .env
 # edit .env and set TELEGRAM_BOT_TOKEN (get one from @BotFather)
 
+# Optional — for the JavaScript-rendering fallback, download the browser:
+playwright install chromium
+
 python bot.py
 ```
+
+> If you don't need JS-rendered sites, set `USE_PLAYWRIGHT_FALLBACK=false` and
+> skip `playwright install`. The bot runs fine with the static scraper alone.
 
 ## Configuration (`.env`)
 
@@ -52,15 +60,19 @@ python bot.py
 | `DATABASE_PATH` | `price_monitor.db` | SQLite file path |
 | `MAX_CONSECUTIVE_FAILURES` | 5 | Failures before warning the user |
 | `REQUEST_TIMEOUT_SECONDS` | 20 | Per-request HTTP timeout |
+| `USE_PLAYWRIGHT_FALLBACK` | true | Render JS pages when static scraping finds no price |
+| `PLAYWRIGHT_EXECUTABLE_PATH` | — | Explicit Chromium path (blank = Playwright's managed browser) |
+| `PLAYWRIGHT_TIMEOUT_SECONDS` | 30 | Max seconds for a rendered page load |
 
 ## Project layout
 
 ```
 price_monitor_bot/
-├── bot.py         # Entry point, application wiring, startup/shutdown
-├── handlers.py    # Command, message and callback-query handlers
-├── scraper.py     # Price extraction strategies
-├── scheduler.py   # APScheduler job management + price-check logic
+├── bot.py                # Entry point, application wiring, startup/shutdown
+├── handlers.py           # Command, message and callback-query handlers
+├── scraper.py            # Static price extraction + fallback orchestration
+├── playwright_scraper.py # Headless-browser fallback for JS pages
+├── scheduler.py          # APScheduler job management + price-check logic
 ├── database.py    # Async SQLite layer
 ├── models.py      # Data classes
 ├── config.py      # Env vars and constants
@@ -70,7 +82,7 @@ price_monitor_bot/
 
 ## Notes
 
-- Static scraping only — sites that render prices with JavaScript (e.g.
-  Ticketmaster) won't expose a price in the initial HTML. The bot reports this
-  clearly; add Playwright as a fallback scraper if you need JS rendering.
+- The static scraper handles most sites instantly. For JavaScript-rendered
+  pages (e.g. Ticketmaster), the Playwright fallback re-fetches the page in a
+  headless browser. If a price still can't be found, the bot tells the user.
 - Designed for a single user or small group; no multi-tenant scaling.
