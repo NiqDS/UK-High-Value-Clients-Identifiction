@@ -96,17 +96,27 @@ class LiveBroker:
         fill = None
         if (raw.get("status") == "closed") or raw.get("filled"):
             avg = raw.get("average") or raw.get("price") or order.price or order.reference_price
-            amount = raw.get("filled") or order.amount
+            amount = float(raw.get("filled") or order.amount)
             fee_info = raw.get("fee") or {}
+            fee_cost = float(fee_info.get("cost") or 0.0)
+            fee_ccy = str(fee_info.get("currency") or "").upper()
+            base_ccy = order.symbol.split("/")[0].upper()
+            fee_quote = fee_cost
+            # Venues like Bybit deduct BUY fees from the RECEIVED base coin: the
+            # account holds filled - fee, not filled. Track the NET units or the
+            # eventual exit oversells and is rejected for insufficient balance.
+            if order.side is Side.BUY and fee_ccy == base_ccy and fee_cost > 0:
+                amount -= fee_cost
+                fee_quote = fee_cost * float(avg)  # report the fee in quote terms
             fill = Fill(
                 client_order_id=order.client_order_id,
                 symbol=order.symbol,
                 side=order.side,
                 price=float(avg),
-                amount=float(amount),
-                fee_quote=float(fee_info.get("cost") or 0.0),
+                amount=amount,
+                fee_quote=fee_quote,
                 role=order.role,
-                cost_quote=float(avg) * float(amount),
+                cost_quote=float(avg) * amount,
                 timestamp=utcnow(),
             )
             status = ExecStatus.FILLED

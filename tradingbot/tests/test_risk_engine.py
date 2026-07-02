@@ -290,6 +290,17 @@ def test_auto_executes_below_threshold() -> None:
     assert d.requires_approval is False
 
 
+def test_exits_never_require_approval() -> None:
+    # an exit reduces risk — it must execute immediately, never wait on a tap
+    cfg = make_config(telegram={"approval_threshold_quote": 0.0})
+    d = make_engine(cfg).evaluate(
+        base_intent(is_entry=False, take_profit_price=None, stop_price=None),
+        base_snapshot(),
+    )
+    assert d.approved is True
+    assert d.requires_approval is False
+
+
 def test_threshold_zero_requires_approval_for_all() -> None:
     cfg = make_config(telegram={"approval_threshold_quote": 0.0})
     d = make_engine(cfg).evaluate(base_intent(), base_snapshot())

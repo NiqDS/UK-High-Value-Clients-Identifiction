@@ -63,8 +63,11 @@ class Executor:
             price = self._maker_price(intent.side, best_bid, best_ask, extra_maker_offset_pct)
             order_type = OrderType.LIMIT
         else:
-            # taker path — only allowed when configured, or for an emergency exit
-            if not fees.allow_taker_fallback and not emergency:
+            # taker path — allowed when configured, and ALWAYS for protective
+            # flow: emergencies and any exit (an exit reduces risk; blocking it
+            # on fee policy would strand a live position).
+            protective = emergency or not intent.is_entry
+            if not fees.allow_taker_fallback and not protective:
                 return ExecutionResult(
                     ExecStatus.REJECTED, None,
                     reason="taker order required but allow_taker_fallback is false",

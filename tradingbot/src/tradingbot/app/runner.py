@@ -10,6 +10,7 @@ graceful shutdown) that the CLI ``run`` command drives against the sandbox.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -21,6 +22,24 @@ from .health import HealthMonitor
 from .portfolio import PositionTracker
 
 logger = logging.getLogger(__name__)
+
+_TF_MS = {"m": 60_000, "h": 3_600_000, "d": 86_400_000, "w": 604_800_000}
+
+
+def timeframe_ms(timeframe: str) -> int:
+    """'1m'/'4h'/'1d'/'1w' -> bar length in milliseconds."""
+    return int(timeframe[:-1]) * _TF_MS[timeframe[-1]]
+
+
+def drop_forming_candle(candles, timeframe: str, now: datetime):
+    """Drop the still-forming last bar(s) so signals see only CLOSED bars —
+    parity with the backtest, which never evaluates an incomplete candle."""
+    tf_ms = timeframe_ms(timeframe)
+    now_ms = int(now.timestamp() * 1000)
+    out = list(candles)
+    while out and out[-1].timestamp + tf_ms > now_ms:
+        out.pop()
+    return out
 
 
 def next_report_time(now: datetime, weekday: int, hour_utc: int) -> datetime:
@@ -53,6 +72,7 @@ class TradingRunner:
         report_path: str | None = None,
         email_sender=None,    # EmailSender | None
         regime_overlay=None,  # CycleRegimeOverlay | None
+        position_store=None,  # JsonPositionStore | None — persists positions across restarts
     ) -> None:
         self.settings = settings
         self.cfg = settings.config
@@ -70,6 +90,7 @@ class TradingRunner:
         self.report_path = report_path
         self.email_sender = email_sender
         self.regime_overlay = regime_overlay
+        self.position_store = position_store
         self._stop = asyncio.Event()
         self._week_first_price: dict[str, float] = {}
         self._last_price: dict[str, float] = {}
@@ -112,10 +133,15 @@ class TradingRunner:
     async def run_once(self, symbol: str, now: datetime | None = None) -> list[PipelineResult]:
         now = now or datetime.now(timezone.utc)
         await self.refresh_regime(now, symbol)
+        # cancel resting bot orders left by prior passes/crashes BEFORE evaluating,
+        # so they can never fill later untracked; the count feeds MAX_OPEN_ORDERS
+        open_orders = await self._cancel_stale_orders(symbol)
         candles = await self.adapter.fetch_ohlcv(
             symbol, self.cfg.strategy.timeframe, self.cfg.strategy.ohlcv_limit
         )
         ticker = await self.adapter.fetch_ticker(symbol)
+        if self.cfg.strategy.signal_on_closed_bar:
+            candles = drop_forming_candle(candles, self.cfg.strategy.timeframe, now)
 
         # feed the volatility kill-switch from the candle stream
         if self.kill_switch is not None:
@@ -135,15 +161,76 @@ class TradingRunner:
                         holding=self.portfolio.holding(symbol))
         intents = list(self.strategy.generate_signals(md))
         intents += self._tp_stop_exits(symbol, ticker.last)
+        intents = self._normalize_exits(symbol, intents)
 
         equity, free = await self._equity_free()
         snapshot = AccountSnapshot(
             equity_quote=equity, free_quote=free, open_positions=len(self.portfolio.positions),
+            open_orders=open_orders, unrealized_pnl_quote=self._unrealized_pnl(),
             ticker=ticker, now=now,
         )
         results = await self.pipeline.process_signals(intents, snapshot)
         self._apply_fills(results, now)
         return results
+
+    def _normalize_exits(self, symbol: str, intents: list[OrderIntent]) -> list[OrderIntent]:
+        """Exits close the ACTUAL position. Strategies size exits from notional
+        (target/price), which drifts from the held units as price moves — an
+        oversell is rejected on spot and the position is stranded. Resize every
+        exit to the tracked units, and keep at most ONE exit per pass (the
+        strategy's channel exit and the stop monitor can both fire on the same
+        breakdown; prefer the emergency stop — it crosses the spread and skips
+        approval). Entries pass through untouched."""
+        entries = [i for i in intents if i.is_entry]
+        exits = [i for i in intents if not i.is_entry]
+        if not exits:
+            return entries
+        pos = self.portfolio.get(symbol)
+        if pos is None or pos.units <= 0:
+            # nothing tracked to close (e.g. post-restart gap) — drop bogus exits
+            logger.warning("%s: dropping %d exit intent(s) with no tracked position",
+                           symbol, len(exits))
+            return entries
+        exits.sort(key=lambda i: not bool(i.metadata.get("emergency")))  # emergency first
+        chosen = dataclasses.replace(exits[0], amount=pos.units)
+        return entries + [chosen]
+
+    def _unrealized_pnl(self) -> float:
+        """Mark open positions against the latest seen prices so the daily-loss
+        stop can react to open drawdown, not only realized losses."""
+        total = 0.0
+        for sym, pos in self.portfolio.positions.items():
+            last = self._last_price.get(sym)
+            if last:
+                total += (last - pos.entry_price) * pos.units
+        return total
+
+    async def _cancel_stale_orders(self, symbol: str) -> int:
+        """Live only: cancel any resting bot-owned orders (client id 'tb-*') so a
+        stale bid can never fill untracked later. Returns the number of open
+        orders remaining on the venue for this symbol."""
+        if self.cfg.app.dry_run:
+            return 0
+        try:
+            orders = await self.adapter.fetch_open_orders(symbol)
+        except Exception:
+            logger.exception("fetch_open_orders failed for %s", symbol)
+            return 0
+        remaining = 0
+        for o in orders:
+            cid = str(o.get("clientOrderId")
+                      or (o.get("info") or {}).get("clientOrderId") or "")
+            oid = o.get("id")
+            if cid.startswith("tb-") and oid:
+                logger.warning("%s: cancelling stale bot order %s (%s)", symbol, oid, cid)
+                try:
+                    await self.adapter.cancel_order(str(oid), symbol)
+                except Exception:
+                    logger.exception("cancel failed for %s", oid)
+                    remaining += 1
+            else:
+                remaining += 1
+        return remaining
 
     def _tp_stop_exits(self, symbol: str, last: float | None) -> list[OrderIntent]:
         """Emit protective exits when a held position hits its take-profit or stop.
@@ -167,9 +254,11 @@ class TradingRunner:
         return []
 
     def _apply_fills(self, results: list[PipelineResult], now: datetime) -> None:
+        filled_any = False
         for r in results:
             if r.outcome is not Outcome.EXECUTED or r.execution is None or r.execution.fill is None:
                 continue
+            filled_any = True
             f = r.execution.fill
             intent = r.intent
             realized = self.portfolio.on_fill(
@@ -186,6 +275,8 @@ class TradingRunner:
                 reason=intent.reason, valuation_pct=(intent.metadata or {}).get("valuation_pct"),
                 client_order_id=f.client_order_id,
             )
+        if filled_any and self.position_store is not None:
+            self.position_store.save(self.portfolio)
 
     # -- weekly report ------------------------------------------------------
     def _market_returns(self) -> dict[str, float]:

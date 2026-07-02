@@ -49,7 +49,11 @@ risk:
   min_notional_per_trade_quote: 5.0    # verify Bybit's per-symbol spot minimum (~1-5 USDT)
   max_notional_per_trade_quote: 26.0   # caps a sleeve (~23)
   max_notional_per_trade_pct_equity: 15.0   # 15% of ~180 ≈ 27; absolute cap binds first
-  per_trade_risk_pct: 5.0           # loose — Donchian stops are wide channel lows
+  per_trade_risk_pct: 15.0          # non-binding BY DESIGN: the Donchian stop is the wide
+                                    # channel low (can sit 30-40% below entry) and the SLEEVE
+                                    # is the real per-coin risk bound — a tighter % here
+                                    # silently rejects exactly the fat-tail breakout entries
+                                    # that generated the validated backtest returns
   max_open_positions: 7             # one sleeve per coin
   max_concurrent_open_orders: 8
   max_trades_per_day: 14
@@ -82,6 +86,9 @@ strategy:
   donchian_entry_period: 50
   donchian_exit_period: 15
   trend_filter_enabled: false       # 200d-SMA gate RULED OUT (see RESEARCH_REPORT)
+  signal_on_closed_bar: true        # PARITY: decide on the last CLOSED daily bar, like the
+                                    # validated backtest — never on an intraday tick/wick
+                                    # (the runner drops the still-forming candle too)
 
 # --- Macro-event exposure windows. Pause entries, don't trade direction. ----
 events:
@@ -114,14 +121,19 @@ funding:
 mvrv:
   enabled: false
 
-# --- Telegram approval. With REAL money, configure this so YOU approve trades.
-# Without a token the runner auto-approves and only warns — strongly recommended
-# to set a token + your chat id before Step 2 (real orders).
+# --- Telegram approval (see docs/TELEGRAM_SETUP.md for the 5-minute setup). --
+# Semantics (enforced in code):
+#   * approval_threshold_quote 0.0 => every ENTRY needs your approval tap.
+#     EXITS never need approval — they reduce risk and execute immediately.
+#   * PAPER (dry_run true) without Telegram: entries auto-approve (with a warning)
+#     so the paper run actually exercises the pipeline.
+#   * LIVE (dry_run false) without Telegram: the bot REFUSES TO START rather than
+#     silently deadlock every trade in PENDING_APPROVAL.
 telegram:
   enabled: true
-  approval_threshold_quote: 0.0     # 0 => approve EVERY trade manually
-  approval_timeout_seconds: 300
-  allowed_chat_ids: []              # add your numeric Telegram chat id before going live
+  approval_threshold_quote: 0.0     # 0 => approve EVERY entry manually
+  approval_timeout_seconds: 300     # no tap in time => entry is dropped (safe default)
+  allowed_chat_ids: []              # REQUIRED before Step 2: your numeric chat id, e.g. [123456789]
 
 reporting:
   weekly_enabled: true

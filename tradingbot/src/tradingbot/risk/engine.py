@@ -261,9 +261,10 @@ class RiskEngine:
                 projected_free_quote=proj_free, round_trip_fee_quote=rt_fee_quote,
             )
 
-        # approved
+        # approved. Only ENTRIES require human approval — an exit reduces risk
+        # and must never wait on (or be dropped by) a missed approval tap.
         threshold = cfg.telegram.approval_threshold_quote
-        requires_approval = notional >= threshold
+        requires_approval = intent.is_entry and notional >= threshold
         return RiskDecision(
             approved=True, gate=RiskGate.OK, reason="approved",
             requires_approval=requires_approval,

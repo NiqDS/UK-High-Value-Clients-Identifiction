@@ -718,7 +718,11 @@ def _build_runner(settings: Settings):
     kill_switch = KillSwitch(cfg.kill_switch)
     posture = PostureProvider(event_module=event_module, kill_switch=kill_switch)
     health = HealthMonitor(cfg.app)
-    portfolio = PositionTracker()
+    # positions survive restarts: a forgotten open position would have no stop
+    # and no exit, and the next signal would re-buy on top of it
+    from .app.portfolio import JsonPositionStore
+    position_store = JsonPositionStore("data/positions.json")
+    portfolio = position_store.load()
     reporter = WeeklyReporter(trade_log)
     email_sender = build_email_sender(cfg.reporting, settings.secrets)
     from .regime.cycle import CycleRegimeOverlay
@@ -756,6 +760,30 @@ def _build_runner(settings: Settings):
         logger.warning("Telegram disabled or unconfigured (need token + allowed_chat_ids); "
                        "running without approval/alerts.")
 
+    if approver is None:
+        # An unwired approver must never silently deadlock intents in
+        # PENDING_APPROVAL (they would be held forever and the bot would look
+        # "cleanly idle" while doing nothing).
+        approval_possible = (
+            cfg.telegram.approval_threshold_quote
+            <= cfg.risk.max_notional_per_trade_quote
+        )
+        if cfg.app.dry_run:
+            from .execution.pipeline import auto_approve
+            approver = auto_approve
+            logger.warning("PAPER mode without Telegram: auto-approving intents "
+                           "(fills are simulated; no real orders).")
+        elif approval_possible:
+            raise SystemExit(
+                "REFUSING TO START LIVE: approval_threshold_quote "
+                f"({cfg.telegram.approval_threshold_quote}) means entries require "
+                "approval, but Telegram is not configured (need TELEGRAM_BOT_TOKEN "
+                "in .env and telegram.allowed_chat_ids in config) — every trade "
+                "would deadlock in PENDING_APPROVAL. Configure Telegram, or raise "
+                "approval_threshold_quote above max_notional_per_trade_quote "
+                f"({cfg.risk.max_notional_per_trade_quote}) to run unattended."
+            )
+
     pipeline = TradingPipeline(cfg, engine, executor, store, approver=approver,
                                posture_provider=posture, health=health,
                                emergency_alert=emergency_alert)
@@ -765,6 +793,7 @@ def _build_runner(settings: Settings):
         event_module=event_module, health=health, reporter=reporter,
         report_deliver=report_deliver, report_path="reports/weekly_latest.md",
         email_sender=email_sender, regime_overlay=regime_overlay,
+        position_store=position_store,
     )
     return runner, bot, signal
 

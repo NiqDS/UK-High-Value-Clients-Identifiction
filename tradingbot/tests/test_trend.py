@@ -42,6 +42,31 @@ def test_breakout_triggers_long_entry() -> None:
     assert s.side == Side.BUY and s.is_entry
     assert s.take_profit_price is None  # rides the trend, no fixed TP
     assert s.stop_price < 105
+    from tradingbot.domain import OrderType
+    assert s.order_type == OrderType.MARKET  # breakout wants immediacy; never rests
+
+
+def test_closed_bar_mode_ignores_intraday_tick() -> None:
+    # last CLOSED close (100) is inside the channel, but the live tick (108)
+    # pokes above it: closed-bar mode must NOT enter; tick mode does.
+    prices = [100, 101, 102, 100, 101, 102, 100]
+    candles = [candle(i, p) for i, p in enumerate(prices)]
+    tick = Ticker("BTC/USD", 108, 108, 108, 1, 1, 0)  # intraday wick
+    md = MarketData("BTC/USD", candles, tick, holding=False)
+    assert DonchianBreakoutStrategy(cfg()).generate_signals(md) != []           # tick mode buys the wick
+    assert DonchianBreakoutStrategy(
+        cfg(signal_on_closed_bar=True)).generate_signals(md) == []              # closed-bar mode does not
+
+
+def test_closed_bar_mode_enters_on_closed_breakout() -> None:
+    # the CLOSED bar itself breaks out: closed-bar mode enters even if the live
+    # tick has pulled back inside the channel
+    prices = [100, 100, 100, 100, 100, 100, 106]
+    candles = [candle(i, p) for i, p in enumerate(prices)]
+    tick = Ticker("BTC/USD", 99, 99, 99, 1, 1, 0)  # tick retraced
+    md = MarketData("BTC/USD", candles, tick, holding=False)
+    sigs = DonchianBreakoutStrategy(cfg(signal_on_closed_bar=True)).generate_signals(md)
+    assert len(sigs) == 1 and sigs[0].side == Side.BUY
 
 
 def test_no_entry_without_breakout() -> None:

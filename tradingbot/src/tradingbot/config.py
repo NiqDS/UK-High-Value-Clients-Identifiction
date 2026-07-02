@@ -155,6 +155,11 @@ class StrategyConfig(BaseModel):
     take_profit_pct: float = _pct(1.5)
     stop_loss_pct: float = _pct(1.0)
     target_notional_quote: float = Field(default=40.0, gt=0.0)
+    # Live/backtest parity: when true, signals are evaluated against the last
+    # CLOSED bar's close (the runner also drops the still-forming candle), not
+    # the live intraday tick — matching how the strategy was validated in
+    # backtests. Recommended true for live daily-bar trend trading.
+    signal_on_closed_bar: bool = False
     # Valuation filter: weighted-average-cost (VWAP) over/under-valuation.
     vwap_filter_enabled: bool = True
     vwap_window: int = Field(default=50, gt=0)

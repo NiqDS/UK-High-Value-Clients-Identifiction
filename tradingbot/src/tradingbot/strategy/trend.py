@@ -29,7 +29,10 @@ class DonchianBreakoutStrategy(Strategy):
         n_entry, n_exit = cfg.donchian_entry_period, cfg.donchian_exit_period
         if len(candles) < max(n_entry, n_exit) + 1:
             return []
-        price = market.last_price
+        # Signal price: the live tick by default; the last CLOSED bar's close when
+        # signal_on_closed_bar is set (parity with the backtest, which decides on
+        # bar closes — the live runner also drops the still-forming candle).
+        price = candles[-1].close if cfg.signal_on_closed_bar else market.last_price
         if not price or price <= 0:
             return []
 
@@ -63,10 +66,14 @@ class DonchianBreakoutStrategy(Strategy):
 
         # Entry: breakout above the upper channel. Protective stop at the lower
         # channel (the natural trend-following stop); no take-profit — ride it.
+        # MARKET, not a passive limit: a breakout entry wants immediacy — a maker
+        # bid parked below a rising market rests unfilled (and un-tracked resting
+        # orders are exactly the failure mode the live review flagged). Requires
+        # fees.allow_taker_fallback in live configs.
         if price > prior_high:
             return [OrderIntent(
                 symbol=market.symbol, side=Side.BUY,
-                amount=cfg.target_notional_quote / price, order_type=OrderType.LIMIT,
+                amount=cfg.target_notional_quote / price, order_type=OrderType.MARKET,
                 price=price, stop_price=min(prior_low, price * (1 - cfg.stop_loss_pct / 100.0)),
                 is_entry=True, reason="donchian breakout buy", metadata=meta)]
         return []
