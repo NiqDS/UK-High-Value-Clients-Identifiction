@@ -400,6 +400,30 @@ into a violent gap. The engine now caps every entry at available cash (no
 leverage), which bounds drawdown at 100%; the return verdict was decisive
 regardless.)*
 
+**Tested next improvement — the cross-sectional momentum gate (RULED OUT).** The
+idea: only let new entries fire in the top-K coins by trailing N-day return, so
+capital concentrates in whatever is trending hardest (targeting the XRP/LINK
+"didn't trend" failure). Run on the full index at 0.6%/side:
+
+| full-index metric | baseline | momentum 60/3 | momentum 90/4 |
+|---|---|---|---|
+| net return | **+633%** | +387% | +346% |
+| max drawdown | **37.7%** | 40.5% | 42.9% |
+| return / maxdd | **16.8** | 9.6 | 8.1 |
+
+Worse on both axes at every setting — the same shape as the SMA gate, for a
+sharper reason: **the Donchian breakout is already a momentum signal**, so
+ranking breakouts by trailing return is momentum-on-momentum. It double-filters
+for "already ran up," buying later and more extended (amputating the
+early-breakout tail) and concentrating into fewer names (worse drawdown). Concrete
+tell: the gate stripped entries from BNB — the baseline's best coin (+1107%→+198%
+at 60/3) — because BNB trends *steadily* and rarely ranks top-3 mid-breakout,
+while flashy movers dominated the ranking; TRX flipped +82%→−42%. **Deeper
+lesson: the gate's premise (starve non-trending coins) was already satisfied by
+basket construction (we excluded XRP/LINK/SOL), so on a pre-curated all-trending
+basket it only adds lag and concentration.** Keep the raw equal-weight basket;
+the momentum-gate code stays available (off) like the SMA gate.
+
 ## 5d. The trend edge is timeframe-specific — it dies on 1-minute bars
 
 To test whether the daily edge ports to intraday execution, we built
