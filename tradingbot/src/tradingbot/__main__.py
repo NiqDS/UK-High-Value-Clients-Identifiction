@@ -550,6 +550,10 @@ def _portfolio(settings: Settings, args) -> int:
     if args.weight_mode not in ("equal", "invvol"):
         logger.error("--weight-mode must be 'equal' or 'invvol'")
         return 2
+    if bool(args.momentum) != bool(args.top_k):
+        logger.error("--momentum and --top-k must be set together "
+                     "(e.g. --momentum 60 --top-k 3)")
+        return 2
 
     def _to_ms(s):
         if not s:
@@ -595,7 +599,9 @@ def _portfolio(settings: Settings, args) -> int:
         base = base.model_copy(update={"trend_filter_enabled": True,
                                        "trend_period": args.trend_period})
     try:
-        result = portfolio_backtest(assets, base, bt, weight_mode=args.weight_mode)
+        result = portfolio_backtest(assets, base, bt, weight_mode=args.weight_mode,
+                                    momentum_lookback=args.momentum,
+                                    momentum_top_k=args.top_k)
     except ValueError as exc:
         logger.error("%s", exc)
         return 2
@@ -957,6 +963,12 @@ def main() -> int:
                         help="portfolio: gate longs on the slow-SMA regime (no longs below it)")
     parser.add_argument("--trend-period", type=int, default=200,
                         help="portfolio: SMA length for the regime gate (default 200 = ~200d)")
+    parser.add_argument("--momentum", type=int, default=0,
+                        help="portfolio: cross-sectional momentum lookback in bars "
+                             "(0 = off; e.g. 60 = rank coins by trailing 60-day return)")
+    parser.add_argument("--top-k", type=int, default=0,
+                        help="portfolio: only the top K coins by momentum may take new "
+                             "entries (requires --momentum)")
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)

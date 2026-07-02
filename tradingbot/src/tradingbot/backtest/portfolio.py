@@ -73,6 +73,8 @@ class PortfolioResult:
     exposure_pct: float      # capital-weighted time-in-market across the basket
     buyhold_pct: float       # weighted buy-and-hold return (the "just hold" benchmark)
     buyhold_maxdd_pct: float # drawdown of holding the basket passively (what trend dodged)
+    momentum_lookback: int = 0   # cross-sectional momentum gate (0 = off)
+    momentum_top_k: int = 0
     equity_curve: list[float] = field(default_factory=list)
 
 
@@ -163,14 +165,26 @@ def portfolio_backtest(
     bt: BacktestConfig,
     weight_mode: str = "equal",
     weights: dict[str, float] | None = None,
+    momentum_lookback: int = 0,
+    momentum_top_k: int = 0,
 ) -> PortfolioResult:
-    """Run the Donchian trend index over the common window of ``assets``."""
+    """Run the Donchian trend index over the common window of ``assets``.
+
+    With ``momentum_lookback``/``momentum_top_k`` set, each sleeve is wrapped in
+    the cross-sectional momentum gate: new entries only when the coin ranks in
+    the basket's top-K by trailing lookback-bar return (exits never gated)."""
     timestamps, aligned = align_on_common_timestamps(assets)
     if not timestamps:
         raise ValueError("assets share no common timestamps — cannot form an index")
 
     w = weights or compute_weights(aligned, weight_mode)
     total_initial = bt.initial_equity
+
+    rank = None
+    if momentum_lookback > 0 and momentum_top_k > 0:
+        from ..strategy.momentum import MomentumRank
+
+        rank = MomentumRank.build(aligned, momentum_lookback, momentum_top_k)
 
     sleeve_curves: list[list[float]] = []
     buyhold_curves: list[list[float]] = []
@@ -182,7 +196,12 @@ def portfolio_backtest(
         sbt = BacktestConfig(
             initial_equity=alloc, fee_pct=bt.fee_pct, slippage_pct=bt.slippage_pct,
         )
-        res = Backtester(sbt).run(candles, DonchianBreakoutStrategy(scfg), symbol=label)
+        strategy: object = DonchianBreakoutStrategy(scfg)
+        if rank is not None:
+            from ..strategy.momentum import MomentumGatedStrategy
+
+            strategy = MomentumGatedStrategy(strategy, label, rank)
+        res = Backtester(sbt).run(candles, strategy, symbol=label)
         sleeve_curves.append(res.equity_curve)
         exp = _exposure_pct(res.trades, [c.timestamp for c in candles])
         # passive buy-and-hold of the same allocation over the same window
@@ -228,6 +247,8 @@ def portfolio_backtest(
         bars=n_bars, start_ts=timestamps[0], end_ts=timestamps[-1],
         weight_mode=weight_mode, fee_pct=bt.fee_pct, slippage_pct=bt.slippage_pct,
         regime_filter=base.trend_filter_enabled, regime_period=base.trend_period,
+        momentum_lookback=momentum_lookback if rank is not None else 0,
+        momentum_top_k=momentum_top_k if rank is not None else 0,
         avg_sleeve_maxdd=sum(maxdds) / len(maxdds) if maxdds else 0.0,
         exposure_pct=exp_weighted,
         buyhold_pct=(bh_final / total_initial - 1.0) * 100.0 if total_initial else 0.0,
@@ -251,7 +272,10 @@ def portfolio_report(result: PortfolioResult, label: str = "") -> str:
         f"{r.bars} common daily bars ({_fmt_ts(r.start_ts)} → {_fmt_ts(r.end_ts)})",
         f"fees {r.fee_pct}%/side, slippage {r.slippage_pct}%/fill | "
         + (f"regime gate: long only above the {r.regime_period}d SMA"
-           if r.regime_filter else "no regime gate (raw breakout)"),
+           if r.regime_filter else "no regime gate (raw breakout)")
+        + (f" | momentum gate: entries only in the top {r.momentum_top_k} "
+           f"of {len(r.sleeves)} by {r.momentum_lookback}-bar return"
+           if r.momentum_lookback else ""),
         "each sleeve runs Donchian breakout, fully deployed when long, cash otherwise",
         "",
         "coin   | alloc% | net%   | buy&hold% | expo% | maxdd% | trades",
