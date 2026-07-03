@@ -34,10 +34,18 @@ class RedactionFilter(logging.Filter):
         try:
             record.msg = _scrub(str(record.msg))
             if record.args:
+                # Scrub only STRING args. Secrets are strings; coercing every arg
+                # to str would turn ints/floats into strings and break any message
+                # using %d/%f (e.g. httpx's 'HTTP Request: ... %d ...' status code).
                 if isinstance(record.args, dict):
-                    record.args = {k: _scrub(str(v)) for k, v in record.args.items()}
+                    record.args = {
+                        k: (_scrub(v) if isinstance(v, str) else v)
+                        for k, v in record.args.items()
+                    }
                 else:
-                    record.args = tuple(_scrub(str(a)) for a in record.args)
+                    record.args = tuple(
+                        _scrub(a) if isinstance(a, str) else a for a in record.args
+                    )
         except Exception:  # logging must never raise
             pass
         return True
@@ -70,3 +78,9 @@ def setup_logging(level: str = "INFO", json_output: bool = False) -> None:
     root.handlers.clear()
     root.addHandler(handler)
     root.setLevel(level.upper())
+
+    # Quiet chatty dependencies: httpx/httpcore log every HTTP request at INFO
+    # (one line per Telegram poll ~1/s) and those lines also echo the bot token
+    # in the URL. Keep only their warnings/errors.
+    for noisy in ("httpx", "httpcore", "telegram", "telegram.ext", "hpack", "asyncio"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)

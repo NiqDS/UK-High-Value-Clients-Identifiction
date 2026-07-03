@@ -740,6 +740,9 @@ def _build_runner(settings: Settings):
     emergency_alert = None
     bot = None
     token = settings.secrets.telegram_bot_token.get_secret_value()
+    if token:
+        from .logging_setup import register_secret
+        register_secret(token)  # scrub the bot token from any log line that echoes it
     if cfg.telegram.enabled and token and cfg.telegram.allowed_chat_ids:
         from .approval.controls import SettingsController
         from .approval.manager import ApprovalManager
