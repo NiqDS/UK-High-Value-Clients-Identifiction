@@ -31,6 +31,9 @@ class Observation:
     timestamp: datetime
     price: float
     volume: float = 0.0
+    symbol: str = ""  # observations are grouped PER SYMBOL — mixing coins of
+                      # different price scales (BTC ~100k, ADA ~0.5) into one
+                      # returns series manufactures spurious 100σ "moves"
 
 
 @dataclass
@@ -58,7 +61,9 @@ def _zscore(latest: float, history: list[float]) -> float:
 @dataclass
 class KillSwitch:
     config: KillSwitchConfig
-    _obs: deque[Observation] = field(default_factory=deque)
+    # per-symbol rolling windows of recent observations (keyed by symbol)
+    _series: dict[str, deque[Observation]] = field(default_factory=dict)
+    _last_ts: dict[str, datetime] = field(default_factory=dict)
     _triggered: bool = False
     _manual_pause: bool = False
     _reason: str = ""
@@ -66,15 +71,16 @@ class KillSwitch:
     _cooldown_until: datetime | None = None
 
     # -- abnormality detection ---------------------------------------------
-    def _trim(self, now: datetime) -> None:
-        cutoff = now - timedelta(minutes=self.config.rolling_window_minutes)
-        while self._obs and self._obs[0].timestamp < cutoff:
-            self._obs.popleft()
+    def _window(self) -> int:
+        """Number of recent bars kept per symbol. Count-based (not wall-clock
+        minutes) so it is cadence-agnostic — the same config works for a 1m
+        intraday feed and a daily-bar feed without mis-trimming."""
+        return max(self.config.rolling_window_minutes, _MIN_SAMPLES + 2)
 
-    def _abnormal(self) -> tuple[bool, str]:
-        if len(self._obs) < _MIN_SAMPLES + 1:
+    def _abnormal_one(self, obs_list: deque[Observation]) -> tuple[bool, str]:
+        if len(obs_list) < _MIN_SAMPLES + 1:
             return False, ""
-        prices = [o.price for o in self._obs]
+        prices = [o.price for o in obs_list]
         returns = [
             (prices[i] - prices[i - 1]) / prices[i - 1]
             for i in range(1, len(prices))
@@ -84,23 +90,39 @@ class KillSwitch:
             z = _zscore(returns[-1], returns[:-1])
             if z >= self.config.price_velocity_sigma:
                 return True, f"price velocity {z:.1f}σ"
-        volumes = [o.volume for o in self._obs]
+        volumes = [o.volume for o in obs_list]
         if any(volumes):
             zv = _zscore(volumes[-1], volumes[:-1])
             if zv >= self.config.volume_spike_sigma:
                 return True, f"volume spike {zv:.1f}σ"
         return False, ""
 
+    def _abnormal(self, symbol: str) -> tuple[bool, str]:
+        """Evaluate ONLY the symbol that just received an observation (its series
+        is the one that changed). A shock on any single symbol pauses new entries
+        basket-wide — crypto sells off together — but the sigma is measured
+        against that symbol's OWN history."""
+        abnormal, reason = self._abnormal_one(self._series[symbol])
+        if abnormal and symbol:
+            reason = f"{symbol} {reason}"
+        return abnormal, reason
+
     # -- ingestion ----------------------------------------------------------
     def observe(self, obs: Observation) -> KillSwitchState:
         """Feed a market observation; update trigger/cooldown state."""
-        self._obs.append(obs)
-        self._trim(obs.timestamp)
+        series = self._series.setdefault(obs.symbol, deque(maxlen=self._window()))
+        # dedupe: the runner re-feeds the same recent bars every poll — only a
+        # strictly newer bar for this symbol advances the window
+        last = self._last_ts.get(obs.symbol)
+        if last is not None and obs.timestamp <= last:
+            return self.status(obs.timestamp)
+        series.append(obs)
+        self._last_ts[obs.symbol] = obs.timestamp
 
         if not self.config.enabled:
             return self.status(obs.timestamp)
 
-        abnormal, reason = self._abnormal()
+        abnormal, reason = self._abnormal(obs.symbol)
         if abnormal:
             first = not self._triggered
             self._triggered = True

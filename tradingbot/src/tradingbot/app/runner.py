@@ -143,13 +143,14 @@ class TradingRunner:
         if self.cfg.strategy.signal_on_closed_bar:
             candles = drop_forming_candle(candles, self.cfg.strategy.timeframe, now)
 
-        # feed the volatility kill-switch from the candle stream
+        # feed the volatility kill-switch PER SYMBOL (dedup + count-window handled
+        # internally, so re-feeding recent bars each poll is safe)
         if self.kill_switch is not None:
             from ..events.kill_switch import Observation
             for c in candles[-self.cfg.kill_switch.rolling_window_minutes:]:
                 self.kill_switch.observe(Observation(
                     datetime.fromtimestamp(c.timestamp / 1000, tz=timezone.utc),
-                    price=c.close, volume=c.volume,
+                    price=c.close, volume=c.volume, symbol=symbol,
                 ))
 
         # track prices for the weekly market benchmark

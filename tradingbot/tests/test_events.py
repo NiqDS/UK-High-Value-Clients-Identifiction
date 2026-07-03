@@ -113,6 +113,50 @@ def test_kill_switch_resumes_after_cooldown() -> None:
     assert ks.is_paused() is False
 
 
+def _feed_sym(ks, symbol, prices, start_min=0):
+    base = datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc)
+    state = None
+    for i, p in enumerate(prices):
+        state = ks.observe(Observation(base + timedelta(minutes=start_min + i),
+                                       p, 10.0, symbol=symbol))
+    return state
+
+
+def test_kill_switch_does_not_mix_symbol_price_scales() -> None:
+    # THE LIVE BUG: 7 coins at wildly different prices fed into one switch made
+    # BTC->ADA read as a ~-100σ crash. Per-symbol series must stay quiet.
+    ks = KillSwitch(ks_cfg())
+    coins = {"BTC/USDT": 100_000.0, "ETH/USDT": 3_000.0, "ADA/USDT": 0.5,
+             "DOGE/USDT": 0.15, "TRX/USDT": 0.12}
+    state = None
+    for i in range(8):  # 8 quiet bars per coin, interleaved as the runner iterates
+        for sym, base_px in coins.items():
+            px = base_px * (1 + 0.001 * ((i % 3) - 1))  # ±0.1% quiet wobble
+            state = ks.observe(Observation(
+                datetime(2026, 6, 12, 12, 0, tzinfo=timezone.utc) + timedelta(minutes=i),
+                px, 10.0, symbol=sym))
+    assert state.triggered is False  # no spurious cross-symbol trigger
+
+
+def test_kill_switch_per_symbol_spike_names_the_symbol() -> None:
+    ks = KillSwitch(ks_cfg())
+    _feed_sym(ks, "BTC/USDT", [100_000] * 6)           # BTC quiet
+    state = _feed_sym(ks, "ADA/USDT", [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.75], start_min=6)
+    assert state.triggered is True                      # ADA's own +50% jump trips
+    assert "ADA/USDT" in state.reason
+
+
+def test_kill_switch_dedupes_refed_bars() -> None:
+    # re-feeding the SAME bars (as the hourly poll does) must not accumulate or
+    # manufacture a trigger
+    ks = KillSwitch(ks_cfg())
+    prices = [100, 100.1, 99.9, 100.05, 99.95, 100.0]
+    _feed_sym(ks, "BTC/USDT", prices)
+    state = _feed_sym(ks, "BTC/USDT", prices)  # identical timestamps -> all skipped
+    assert state.triggered is False
+    assert len(ks._series["BTC/USDT"]) == len(prices)  # not doubled
+
+
 def test_kill_switch_manual_pause_and_resume() -> None:
     ks = KillSwitch(ks_cfg())
     ks.manual_pause()

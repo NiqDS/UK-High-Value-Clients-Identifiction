@@ -135,12 +135,12 @@ async def _paper_run(settings: Settings) -> int:
         for symbol in cfg.exchange.symbols_allowlist:
             candles = await adapter.fetch_ohlcv(symbol, cfg.strategy.timeframe, cfg.strategy.ohlcv_limit)
             ticker = await adapter.fetch_ticker(symbol)
-            # feed the volatility kill-switch from the candle stream
+            # feed the volatility kill-switch PER SYMBOL (never mix price scales)
             for c in candles:
                 kill_switch.observe(
                     Observation(
                         datetime.fromtimestamp(c.timestamp / 1000, tz=timezone.utc),
-                        price=c.close, volume=c.volume,
+                        price=c.close, volume=c.volume, symbol=symbol,
                     )
                 )
             ks = kill_switch.status(now)
