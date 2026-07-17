@@ -42,3 +42,20 @@ def test_setup_quiets_httpx_logger() -> None:
     setup_logging("INFO")
     assert logging.getLogger("httpx").level == logging.WARNING
     assert logging.getLogger("telegram.ext").level == logging.WARNING
+
+
+def test_plain_formatter_scrubs_tracebacks() -> None:
+    # third-party network errors embed the bot token in the traceback URL —
+    # the FORMATTED output (incl. exc_info) must be scrubbed, not just args
+    from tradingbot.logging_setup import PlainRedactingFormatter
+
+    register_secret("tok3n-s3cret")
+    try:
+        raise RuntimeError("POST https://api.telegram.org/bottok3n-s3cret/getUpdates")
+    except RuntimeError:
+        import sys
+        rec = logging.LogRecord("telegram.ext", logging.ERROR, __file__, 1,
+                                "Exception while polling", (), sys.exc_info())
+    out = PlainRedactingFormatter("%(levelname)s %(message)s").format(rec)
+    assert "tok3n-s3cret" not in out
+    assert "***REDACTED***" in out

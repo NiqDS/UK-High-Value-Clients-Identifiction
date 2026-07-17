@@ -124,20 +124,13 @@ class RiskEngine:
         cfg = self.config
         risk = cfg.risk
 
-        # 1. master trading flag
-        if not self.store.is_trading_enabled():
-            return RiskDecision.reject(
-                RiskGate.TRADING_DISABLED,
-                f"Trading disabled: {self.store.disabled_reason() or 'master flag off'}",
-            )
-
-        # 2. symbol allowlist
+        # 2. symbol allowlist (universal — applies to entries AND exits)
         if intent.symbol not in cfg.exchange.symbols_allowlist:
             return RiskDecision.reject(
                 RiskGate.SYMBOL_NOT_ALLOWED, f"{intent.symbol} not in allowlist"
             )
 
-        # 3. intent sanity + usable price
+        # 3. intent sanity + usable price (universal)
         if intent.amount <= 0:
             return RiskDecision.reject(RiskGate.INVALID_INTENT, "amount must be > 0")
         est_price = self._est_price(intent, snapshot)
@@ -146,6 +139,41 @@ class RiskEngine:
                 RiskGate.INVALID_INTENT, "no usable price (no limit price and no ticker)"
             )
         notional = intent.notional(est_price)
+        fee_pct = self._effective_fee_pct(snapshot)
+        rt_fee_quote = self._round_trip_fee_quote(intent, est_price, fee_pct)
+
+        # EXIT FAST-PATH. The gates below bound risk-ADDING intents. An exit on a
+        # long-only book REDUCES exposure, and blocking it strands a live position
+        # with no way out — so exits are exempt from the budget/size/market-quality
+        # gates. Concretely each would otherwise misfire:
+        #   - TRADING_DISABLED / DAILY_LOSS_STOP: tripping the circuit breaker in a
+        #     crash must not forbid de-risking (that inverts capital preservation);
+        #   - MIN_NOTIONAL: a crashed or dust-residue sleeve (< min) could never be
+        #     closed and would block re-entry forever;
+        #   - MAX_NOTIONAL: a WINNING position grown past the per-trade cap — the
+        #     whole point of a trend rider — could never be sold;
+        #   - SPREAD_TOO_WIDE: spreads blow out exactly when protective stops must
+        #     fire. Exits execute; the floor cannot be threatened by a sell (it
+        #     adds free balance).
+        if not intent.is_entry:
+            if not self.store.is_trading_enabled():
+                logger.warning(
+                    "Trading disabled (%s) — allowing risk-REDUCING exit for %s anyway",
+                    self.store.disabled_reason() or "master flag off", intent.symbol,
+                )
+            proj_free = self._projected_free(intent, snapshot, est_price, fee_pct)
+            return RiskDecision(
+                approved=True, gate=RiskGate.OK, reason="exit approved (risk-reducing)",
+                requires_approval=False, est_price=est_price, notional=notional,
+                projected_free_quote=proj_free, round_trip_fee_quote=rt_fee_quote,
+            )
+
+        # 1. master trading flag (entries only — see exit fast-path above)
+        if not self.store.is_trading_enabled():
+            return RiskDecision.reject(
+                RiskGate.TRADING_DISABLED,
+                f"Trading disabled: {self.store.disabled_reason() or 'master flag off'}",
+            )
 
         # 4. daily loss / drawdown stop
         counters = self.store.get_daily_counters(snapshot.now)
@@ -158,33 +186,32 @@ class RiskEngine:
             )
 
         # 5/6. daily counts & notional (entries consume budget)
-        if intent.is_entry:
-            if counters.trades + 1 > risk.max_trades_per_day:
-                return RiskDecision.reject(
-                    RiskGate.MAX_TRADES_PER_DAY,
-                    f"would exceed max {risk.max_trades_per_day} trades/day",
-                    est_price=est_price, notional=notional,
-                )
-            if counters.traded_notional + notional > risk.max_daily_traded_notional_quote:
-                return RiskDecision.reject(
-                    RiskGate.MAX_DAILY_NOTIONAL,
-                    f"would exceed daily notional cap {risk.max_daily_traded_notional_quote}",
-                    est_price=est_price, notional=notional,
-                )
+        if counters.trades + 1 > risk.max_trades_per_day:
+            return RiskDecision.reject(
+                RiskGate.MAX_TRADES_PER_DAY,
+                f"would exceed max {risk.max_trades_per_day} trades/day",
+                est_price=est_price, notional=notional,
+            )
+        if counters.traded_notional + notional > risk.max_daily_traded_notional_quote:
+            return RiskDecision.reject(
+                RiskGate.MAX_DAILY_NOTIONAL,
+                f"would exceed daily notional cap {risk.max_daily_traded_notional_quote}",
+                est_price=est_price, notional=notional,
+            )
 
-            # 7/8. open positions / orders
-            if snapshot.open_positions >= risk.max_open_positions:
-                return RiskDecision.reject(
-                    RiskGate.MAX_OPEN_POSITIONS,
-                    f"open positions {snapshot.open_positions} >= {risk.max_open_positions}",
-                    est_price=est_price, notional=notional,
-                )
-            if snapshot.open_orders >= risk.max_concurrent_open_orders:
-                return RiskDecision.reject(
-                    RiskGate.MAX_OPEN_ORDERS,
-                    f"open orders {snapshot.open_orders} >= {risk.max_concurrent_open_orders}",
-                    est_price=est_price, notional=notional,
-                )
+        # 7/8. open positions / orders
+        if snapshot.open_positions >= risk.max_open_positions:
+            return RiskDecision.reject(
+                RiskGate.MAX_OPEN_POSITIONS,
+                f"open positions {snapshot.open_positions} >= {risk.max_open_positions}",
+                est_price=est_price, notional=notional,
+            )
+        if snapshot.open_orders >= risk.max_concurrent_open_orders:
+            return RiskDecision.reject(
+                RiskGate.MAX_OPEN_ORDERS,
+                f"open orders {snapshot.open_orders} >= {risk.max_concurrent_open_orders}",
+                est_price=est_price, notional=notional,
+            )
 
         # 9. min notional (dust / exchange minimum)
         min_notional = risk.min_notional_per_trade_quote
@@ -237,9 +264,8 @@ class RiskEngine:
         #     off AND there is no TP, skip this gate: the captured channel move
         #     dwarfs the maker round-trip fee, and the floor / per-trade-risk / sleeve
         #     caps still bound the trade. TP-bearing entries are always gated.
-        fee_pct = self._effective_fee_pct(snapshot)
-        rt_fee_quote = self._round_trip_fee_quote(intent, est_price, fee_pct)
-        gate_fees = intent.is_entry and (
+        #     (fee_pct / rt_fee_quote computed above, before the exit fast-path.)
+        gate_fees = (
             cfg.fees.require_take_profit or intent.take_profit_price is not None
         )
         if gate_fees:

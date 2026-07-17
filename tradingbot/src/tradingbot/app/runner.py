@@ -28,7 +28,13 @@ _TF_MS = {"m": 60_000, "h": 3_600_000, "d": 86_400_000, "w": 604_800_000}
 
 def timeframe_ms(timeframe: str) -> int:
     """'1m'/'4h'/'1d'/'1w' -> bar length in milliseconds."""
-    return int(timeframe[:-1]) * _TF_MS[timeframe[-1]]
+    try:
+        return int(timeframe[:-1]) * _TF_MS[timeframe[-1]]
+    except (KeyError, ValueError, IndexError):
+        raise ValueError(
+            f"unsupported timeframe {timeframe!r} for closed-bar mode "
+            "(use Nm/Nh/Nd/Nw, e.g. '1d')"
+        ) from None
 
 
 def drop_forming_candle(candles, timeframe: str, now: datetime):
@@ -95,6 +101,8 @@ class TradingRunner:
         self._week_first_price: dict[str, float] = {}
         self._last_price: dict[str, float] = {}
         self._regime_refreshed: datetime | None = None
+        self._equity_cache: tuple[float, float] | None = None
+        self._equity_cache_mono: float = 0.0
 
     async def refresh_regime(self, now: datetime, symbol: str) -> None:
         """Recompute the slow cycle/regime risk multiplier from daily candles
@@ -117,17 +125,29 @@ class TradingRunner:
 
     # -- balance ------------------------------------------------------------
     async def _equity_free(self) -> tuple[float, float]:
+        # One pass polls 7 symbols back-to-back; the balance can't meaningfully
+        # change between them, so cache for a few seconds (7 REST calls -> 1).
+        import time as _time
+
+        if (self._equity_cache is not None
+                and _time.monotonic() - self._equity_cache_mono < 30.0):
+            return self._equity_cache
         quote = self.cfg.exchange.quote_currency
+        result: tuple[float, float] | None = None
         if self.settings.secrets.has_exchange_credentials:
             try:
                 bal = await self.adapter.fetch_balance()
-                return bal.total(quote), bal.free(quote)
+                result = (bal.total(quote), bal.free(quote))
             except Exception:
                 logger.exception("fetch_balance failed; using simulated equity")
-        # No credentials (paper run): size off the configured paper_equity so sleeve
-        # sizes match the intended real capital; fall back to floor*3 if unset.
-        simulated = self.cfg.app.paper_equity or self.cfg.risk.floor_quote * 3
-        return simulated, simulated
+        if result is None:
+            # No credentials (paper run): size off the configured paper_equity so
+            # sleeves match the intended real capital; floor*3 if unset.
+            simulated = self.cfg.app.paper_equity or self.cfg.risk.floor_quote * 3
+            result = (simulated, simulated)
+        self._equity_cache = result
+        self._equity_cache_mono = _time.monotonic()
+        return result
 
     # -- one pass for one symbol -------------------------------------------
     async def run_once(self, symbol: str, now: datetime | None = None) -> list[PipelineResult]:
@@ -254,6 +274,30 @@ class TradingRunner:
                                 reason="take-profit hit")]
         return []
 
+    def _validate_fill(self, f, intent: OrderIntent) -> None:
+        """Arithmetic invariants every fill must satisfy. Violations are logged
+        CRITICAL (never raised — the loop must keep running and the books must
+        still record what actually happened), so a venue/parsing bug is loud
+        instead of silently corrupting position/PnL state."""
+        problems: list[str] = []
+        if f.amount <= 0 or f.price <= 0:
+            problems.append(f"non-positive fill: amount={f.amount} price={f.price}")
+        expected_cost = f.price * f.amount
+        if expected_cost > 0 and abs(f.cost_quote - expected_cost) > max(0.01, expected_cost * 0.01):
+            problems.append(
+                f"cost_quote {f.cost_quote:.6f} != price*amount {expected_cost:.6f}")
+        if f.fee_quote < 0 or (expected_cost > 0 and f.fee_quote > expected_cost * 0.05):
+            problems.append(
+                f"fee_quote {f.fee_quote:.6f} implausible vs notional {expected_cost:.6f}")
+        if f.side == Side.SELL:
+            pos = self.portfolio.get(f.symbol)
+            held = pos.units if pos else 0.0
+            if f.amount > held * 1.001 + 1e-12:
+                problems.append(f"sold {f.amount} > tracked units {held}")
+        for p in problems:
+            logger.critical("FILL INVARIANT VIOLATION %s %s: %s (intent: %s)",
+                            f.side.value, f.symbol, p, intent.reason)
+
     def _apply_fills(self, results: list[PipelineResult], now: datetime) -> None:
         filled_any = False
         for r in results:
@@ -261,6 +305,7 @@ class TradingRunner:
                 continue
             filled_any = True
             f = r.execution.fill
+            self._validate_fill(f, r.intent)
             intent = r.intent
             realized = self.portfolio.on_fill(
                 f.symbol, f.side, f.price, f.amount, now,
@@ -276,8 +321,12 @@ class TradingRunner:
                 reason=intent.reason, valuation_pct=(intent.metadata or {}).get("valuation_pct"),
                 client_order_id=f.client_order_id,
             )
-        if filled_any and self.position_store is not None:
-            self.position_store.save(self.portfolio)
+        if filled_any:
+            # a fill moved real balance — the next symbol's floor/sizing checks
+            # must see it, so drop the cached equity immediately
+            self._equity_cache = None
+            if self.position_store is not None:
+                self.position_store.save(self.portfolio)
 
     # -- weekly report ------------------------------------------------------
     def _market_returns(self) -> dict[str, float]:

@@ -290,6 +290,61 @@ def test_auto_executes_below_threshold() -> None:
     assert d.requires_approval is False
 
 
+def exit_intent(**kw) -> OrderIntent:
+    params = dict(symbol="BTC/USD", side=Side.SELL, amount=0.4, order_type=OrderType.MARKET,
+                  price=100.0, take_profit_price=None, stop_price=None, is_entry=False)
+    params.update(kw)
+    return OrderIntent(**params)
+
+
+# --- exits are risk-REDUCING: never blocked by budget/size/market gates -----
+def test_exit_allowed_when_trading_disabled() -> None:
+    # a halted bot must still be able to DE-RISK (floor breach / manual pause)
+    store = InMemoryRiskStateStore()
+    store.set_trading_enabled(False, "floor breach")
+    d = RiskEngine(make_config(), store).evaluate(exit_intent(), base_snapshot())
+    assert d.approved is True
+
+
+def test_exit_allowed_when_daily_loss_tripped() -> None:
+    # the daily-loss circuit breaker must not forbid closing the losing positions
+    d = make_engine().evaluate(
+        exit_intent(), base_snapshot(unrealized_pnl_quote=-10_000.0))
+    assert d.approved is True
+
+
+def test_exit_allowed_above_max_notional() -> None:
+    # a WINNING position grown past the per-trade cap must still be sellable
+    d = make_engine().evaluate(exit_intent(amount=50.0), base_snapshot())  # 5000 >> cap
+    assert d.approved is True
+
+
+def test_exit_allowed_below_min_notional() -> None:
+    # dust / crashed-sleeve exits must not be stranded by the dust gate
+    d = make_engine().evaluate(exit_intent(amount=0.001), base_snapshot())  # 0.10 notional
+    assert d.approved is True
+
+
+def test_exit_allowed_in_wide_spread() -> None:
+    # spreads blow out exactly when stops must fire
+    wide = base_snapshot(ticker=make_ticker(bid=95.0, ask=105.0))
+    d = make_engine().evaluate(exit_intent(), wide)
+    assert d.approved is True
+
+
+def test_entry_still_blocked_when_trading_disabled() -> None:
+    store = InMemoryRiskStateStore()
+    store.set_trading_enabled(False, "halt")
+    d = RiskEngine(make_config(), store).evaluate(base_intent(), base_snapshot())
+    assert d.gate is RiskGate.TRADING_DISABLED
+
+
+def test_entry_still_blocked_by_unrealized_daily_loss() -> None:
+    d = make_engine().evaluate(
+        base_intent(), base_snapshot(unrealized_pnl_quote=-10_000.0))
+    assert d.gate is RiskGate.DAILY_LOSS_STOP
+
+
 def test_exits_never_require_approval() -> None:
     # an exit reduces risk — it must execute immediately, never wait on a tap
     cfg = make_config(telegram={"approval_threshold_quote": 0.0})

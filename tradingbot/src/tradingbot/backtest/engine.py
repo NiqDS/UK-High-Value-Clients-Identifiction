@@ -119,7 +119,13 @@ class Backtester:
             fees_total += exit_fee
             pos = None
 
+        # One shared, growing window instead of candles[:i+1] per bar: that slice
+        # copies O(i) elements every bar => O(n^2) for the run (a 132k-bar 1m
+        # backtest copies ~8.7e9 elements). Strategies only READ the list within
+        # the call, so passing the same growing list is behaviour-identical.
+        seen: list[Candle] = []
         for i, bar in enumerate(candles):
+            seen.append(bar)
             # 1. execute the order decided on the previous bar, at this bar's open
             if pending is not None:
                 action, intent = pending
@@ -166,7 +172,7 @@ class Backtester:
 
             # 4. generate signals using ONLY data up to and including this bar
             md = MarketData(
-                symbol=symbol, candles=candles[: i + 1],
+                symbol=symbol, candles=seen,
                 ticker=_ticker_at(symbol, bar.close), holding=pos is not None,
             )
             signals = strategy.generate_signals(md)

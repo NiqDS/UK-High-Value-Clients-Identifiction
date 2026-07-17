@@ -51,6 +51,16 @@ class RedactionFilter(logging.Filter):
         return True
 
 
+class PlainRedactingFormatter(logging.Formatter):
+    """Plain-text formatter that scrubs the FINAL formatted line — including
+    exception tracebacks. The args-level filter cannot reach exc_info text, and
+    third-party tracebacks (e.g. telegram/httpx network errors) embed the full
+    request URL with the bot token in the stack trace."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        return _scrub(super().format(record))
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload: dict[str, Any] = {
@@ -71,7 +81,7 @@ def setup_logging(level: str = "INFO", json_output: bool = False) -> None:
         handler.setFormatter(JsonFormatter())
     else:
         handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)-7s %(name)s | %(message)s")
+            PlainRedactingFormatter("%(asctime)s %(levelname)-7s %(name)s | %(message)s")
         )
 
     root = logging.getLogger()

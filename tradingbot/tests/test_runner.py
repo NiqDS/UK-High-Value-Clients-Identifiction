@@ -196,6 +196,58 @@ async def test_cancel_stale_orders_skipped_in_paper(tmp_path) -> None:
     assert await runner._cancel_stale_orders("BTC/USD") == 0
 
 
+async def test_equity_cached_within_pass_and_invalidated_on_fill(tmp_path) -> None:
+    runner, _, _ = build(tmp_path, BuyOnceStrategy())
+    calls = {"n": 0}
+
+    class _BalClient(_FakeClient):
+        async def fetch_balance(self, params=None):
+            calls["n"] += 1
+            return {"free": {"USD": 500.0}, "used": {}, "total": {"USD": 500.0}}
+
+    runner.adapter = ExchangeAdapter(_BalClient())
+    runner.settings.secrets = type(runner.settings.secrets)(
+        _env_file=None, exchange_api_key="k", exchange_api_secret="s")
+    e1 = await runner._equity_free()
+    e2 = await runner._equity_free()
+    assert e1 == e2 == (500.0, 500.0)
+    assert calls["n"] == 1              # second call served from cache
+    runner._equity_cache = None         # what _apply_fills does after a fill
+    await runner._equity_free()
+    assert calls["n"] == 2              # refetched after invalidation
+
+
+async def test_validate_fill_flags_oversell_and_bad_cost(tmp_path, caplog) -> None:
+    import logging as _logging
+    from tradingbot.execution.models import Fill, LiquidityRole, utcnow
+
+    runner, _, portfolio = build(tmp_path, BuyOnceStrategy())
+    portfolio.on_fill("BTC/USD", Side.BUY, 100.0, 0.4, NOW)
+    bad = Fill(client_order_id="tb-x", symbol="BTC/USD", side=Side.SELL,
+               price=100.0, amount=0.9,              # > 0.4 held -> oversell
+               fee_quote=50.0,                        # absurd fee (>5% notional)
+               role=LiquidityRole.TAKER,
+               cost_quote=123.0,                      # != price*amount (90)
+               timestamp=utcnow())
+    it = OrderIntent(symbol="BTC/USD", side=Side.SELL, amount=0.9,
+                     order_type=OrderType.MARKET, price=100.0, is_entry=False,
+                     reason="test exit")
+    with caplog.at_level(_logging.CRITICAL):
+        runner._validate_fill(bad, it)
+    text = caplog.text
+    assert "sold 0.9 > tracked units 0.4" in text
+    assert "cost_quote" in text and "fee_quote" in text
+
+
+def test_timeframe_ms_rejects_unknown_units() -> None:
+    from tradingbot.app.runner import timeframe_ms
+    import pytest as _pytest
+
+    assert timeframe_ms("4h") == 4 * 3_600_000
+    with _pytest.raises(ValueError, match="unsupported timeframe"):
+        timeframe_ms("1M")  # months unsupported for closed-bar math
+
+
 async def test_paper_equity_overrides_synthetic_fallback(tmp_path) -> None:
     # no credentials -> paper run sizes off app.paper_equity when set
     runner, _, _ = build(tmp_path, BuyOnceStrategy())

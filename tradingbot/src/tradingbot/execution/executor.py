@@ -75,6 +75,12 @@ class Executor:
             role = LiquidityRole.TAKER
             price = best_ask if intent.side == Side.BUY else best_bid
             order_type = OrderType.MARKET if is_market else intent.order_type
+            # A taker order's fill IS the live book price — measuring "slippage"
+            # against the (possibly closed-bar, hours-old) signal price would skip
+            # exactly the fast breakouts the strategy exists to catch. Backtest
+            # parity fills at next-bar open regardless of the gap; the spread gate
+            # still protects against a disorderly book.
+            reference = price
 
         return Order(
             client_order_id=client_order_id,

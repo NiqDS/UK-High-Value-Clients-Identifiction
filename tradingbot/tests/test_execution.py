@@ -84,6 +84,39 @@ async def test_slippage_guard_skips_when_market_moved() -> None:
     assert "slippage" in res.reason
 
 
+async def test_exit_never_blocked_by_taker_policy() -> None:
+    # an exit reduces risk: taker policy must not strand a position
+    ex = Executor(cfg(maker_first=False, allow_taker_fallback=False), PaperBroker(cfg().fees))
+    res = await ex.execute(
+        OrderIntent(symbol="BTC/USD", side=Side.SELL, amount=0.4,
+                    order_type=OrderType.MARKET, price=100.0, is_entry=False),
+        decision(est_price=100.0), ticker())
+    assert res.filled
+    assert res.order.role is LiquidityRole.TAKER
+
+
+async def test_market_taker_entry_not_skipped_on_signal_gap() -> None:
+    # closed-bar signals are up to a day old; a MARKET taker fill IS the live
+    # price, so the slippage guard must not compare it to the stale signal price
+    # (that would skip exactly the fast breakouts). Signal at 100, market at 108.
+    c = cfg(maker_first=True, allow_taker_fallback=True, max_slippage_pct=0.20)
+    ex = Executor(c, PaperBroker(c.fees))
+    res = await ex.execute(
+        intent(order_type=OrderType.MARKET, price=100.0),
+        decision(est_price=100.0), ticker(bid=107.8, ask=108.0))
+    assert res.filled                      # NOT skipped despite the 8% gap
+    assert res.order.price == pytest.approx(108.0)
+    assert res.order.reference_price == pytest.approx(108.0)  # live book, not signal
+
+
+async def test_maker_slippage_guard_still_active() -> None:
+    # the guard still protects the maker path (fresh signals, resting limits)
+    c = cfg(maker_first=True, max_slippage_pct=0.20)
+    ex = Executor(c, PaperBroker(c.fees))
+    res = await ex.execute(intent(side=Side.BUY), decision(est_price=110.0), ticker())
+    assert res.status is ExecStatus.SKIPPED
+
+
 # --- paper fills + fees ----------------------------------------------------
 async def test_paper_fill_applies_maker_fee() -> None:
     c = cfg(maker_first=True, maker_fee_pct=0.40)
