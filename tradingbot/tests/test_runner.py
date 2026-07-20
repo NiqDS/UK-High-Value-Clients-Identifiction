@@ -248,6 +248,76 @@ def test_timeframe_ms_rejects_unknown_units() -> None:
         timeframe_ms("1M")  # months unsupported for closed-bar math
 
 
+class _ReconcileClient(_FakeClient):
+    """Fake venue exposing a fixed balance + a fixed last price per symbol."""
+
+    def __init__(self, base_units: dict[str, float], price: float = 100.0) -> None:
+        self._base_units = base_units
+        self._price = price
+
+    async def fetch_balance(self, params=None):
+        total = {"USD": 1000.0}
+        total.update(self._base_units)
+        return {"free": dict(total), "used": {}, "total": dict(total)}
+
+    async def fetch_ticker(self, symbol, params=None):
+        return {"symbol": symbol, "bid": self._price, "ask": self._price,
+                "last": self._price, "baseVolume": 1, "quoteVolume": 1, "timestamp": 0}
+
+
+def _live(runner):
+    # flip the runner into live mode with (fake) credentials so reconcile runs
+    runner.cfg.app.dry_run = False
+    runner.settings.secrets = type(runner.settings.secrets)(
+        _env_file=None, exchange_api_key="k", exchange_api_secret="s")
+
+
+async def test_reconcile_adopts_untracked_exchange_holding(tmp_path) -> None:
+    runner, _, portfolio = build(tmp_path, BuyOnceStrategy())
+    _live(runner)
+    runner.adapter = ExchangeAdapter(_ReconcileClient({"BTC": 0.5}, price=100.0))  # 50 USD
+    assert not portfolio.holding("BTC/USD")
+    await runner.reconcile_positions(now=NOW)
+    assert portfolio.holding("BTC/USD")                       # adopted
+    assert portfolio.get("BTC/USD").units == pytest.approx(0.5)
+    assert portfolio.get("BTC/USD").entry_price == pytest.approx(100.0)
+
+
+async def test_reconcile_drops_phantom_position(tmp_path) -> None:
+    runner, _, portfolio = build(tmp_path, BuyOnceStrategy())
+    _live(runner)
+    portfolio.on_fill("BTC/USD", Side.BUY, 100.0, 0.4, NOW)    # tracker thinks it holds
+    runner.adapter = ExchangeAdapter(_ReconcileClient({"BTC": 0.0}, price=100.0))  # venue: none
+    await runner.reconcile_positions(now=NOW)
+    assert not portfolio.holding("BTC/USD")                   # phantom dropped
+
+
+async def test_reconcile_adopts_exchange_units_on_drift(tmp_path) -> None:
+    runner, _, portfolio = build(tmp_path, BuyOnceStrategy())
+    _live(runner)
+    portfolio.on_fill("BTC/USD", Side.BUY, 100.0, 0.40, NOW)
+    runner.adapter = ExchangeAdapter(_ReconcileClient({"BTC": 0.30}, price=100.0))  # venue less
+    await runner.reconcile_positions(now=NOW)
+    assert portfolio.get("BTC/USD").units == pytest.approx(0.30)  # exchange is truth
+
+
+async def test_reconcile_noop_in_paper_mode(tmp_path) -> None:
+    # paper/dry-run must NOT adopt the user's real wallet as bot positions
+    runner, _, portfolio = build(tmp_path, BuyOnceStrategy())  # dry_run defaults True
+    runner.adapter = ExchangeAdapter(_ReconcileClient({"BTC": 5.0}, price=100.0))
+    await runner.reconcile_positions(now=NOW)
+    assert not portfolio.holding("BTC/USD")                   # untouched
+
+
+async def test_reconcile_ignores_dust_holding(tmp_path) -> None:
+    runner, _, portfolio = build(tmp_path, BuyOnceStrategy())
+    _live(runner)
+    # 0.00001 BTC * 100 = 0.001 USD, below min_notional_per_trade_quote default
+    runner.adapter = ExchangeAdapter(_ReconcileClient({"BTC": 0.00001}, price=100.0))
+    await runner.reconcile_positions(now=NOW)
+    assert not portfolio.holding("BTC/USD")                   # dust ignored
+
+
 async def test_paper_equity_overrides_synthetic_fallback(tmp_path) -> None:
     # no credentials -> paper run sizes off app.paper_equity when set
     runner, _, _ = build(tmp_path, BuyOnceStrategy())

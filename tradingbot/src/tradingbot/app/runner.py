@@ -19,7 +19,7 @@ from ..execution.pipeline import Outcome, PipelineResult, TradingPipeline
 from ..risk.engine import AccountSnapshot
 from ..strategy.base import MarketData, Strategy
 from .health import HealthMonitor
-from .portfolio import PositionTracker
+from .portfolio import Position, PositionTracker
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +148,76 @@ class TradingRunner:
         self._equity_cache = result
         self._equity_cache_mono = _time.monotonic()
         return result
+
+    # -- startup reconciliation --------------------------------------------
+    async def reconcile_positions(self, now: datetime | None = None) -> None:
+        """Reconcile the persisted tracker against the exchange's ACTUAL balances
+        at startup. Closes the gap the in-memory order-idempotency set cannot:
+        if the bot placed an order, it filled, and the process died before
+        recording it, a naive restart would believe it is flat and re-buy on top
+        (double exposure). Symmetrically, a position closed outside the bot
+        (manual sell / liquidation) would otherwise leave a phantom the bot keeps
+        trying to exit forever.
+
+        Assumes a DEDICATED account (the deployment holds only the bot's quote
+        float — see config), so any base-asset balance is the bot's. Live only:
+        in paper/dry-run the exchange balance is the user's real wallet and must
+        NOT be adopted as bot positions.
+        """
+        if self.cfg.app.dry_run or not self.settings.secrets.has_exchange_credentials:
+            return
+        now = now or datetime.now(timezone.utc)
+        try:
+            bal = await self.adapter.fetch_balance()
+        except Exception:
+            logger.exception("reconcile: fetch_balance failed — starting with the persisted "
+                             "tracker UNVERIFIED; positions may be stale")
+            return
+
+        min_notional = self.cfg.risk.min_notional_per_trade_quote
+        changed = False
+        for symbol in self.cfg.exchange.symbols_allowlist:
+            base = symbol.split("/")[0]
+            ex_units = bal.total(base)
+            try:
+                price = (await self.adapter.fetch_ticker(symbol)).last or 0.0
+            except Exception:
+                logger.exception("reconcile: ticker fetch failed for %s — skipping", symbol)
+                continue
+            ex_value = ex_units * price
+            pos = self.portfolio.get(symbol)
+
+            if pos is None and ex_value >= min_notional:
+                # untracked holding on the venue -> adopt so the exit logic manages
+                # it (entry=current price; the channel exit still governs downside)
+                logger.critical(
+                    "RECONCILE: untracked %s holding on the exchange (%.8f = %.2f %s) — "
+                    "adopting as a managed position at the current price. Likely a fill "
+                    "the bot placed but crashed before recording.",
+                    base, ex_units, ex_value, self.cfg.exchange.quote_currency)
+                self.portfolio.positions[symbol] = Position(
+                    symbol=symbol, units=ex_units, entry_price=price, entry_ts=now)
+                changed = True
+            elif pos is not None and ex_value < min_notional:
+                # the tracked position is gone on the venue (manual sell / liquidation)
+                logger.warning(
+                    "RECONCILE: tracked %s position not present on the exchange "
+                    "(%.2f %s < min) — dropping the phantom so no exits are emitted for it.",
+                    symbol, ex_value, self.cfg.exchange.quote_currency)
+                del self.portfolio.positions[symbol]
+                changed = True
+            elif pos is not None and ex_units > 0 and abs(pos.units - ex_units) > ex_units * 0.01:
+                # material unit drift (partial external fill) -> trust the exchange
+                logger.warning("RECONCILE: %s units %.8f (tracker) != %.8f (exchange) — "
+                               "adopting the exchange amount.", symbol, pos.units, ex_units)
+                pos.units = ex_units
+                changed = True
+
+        if changed and self.position_store is not None:
+            self.position_store.save(self.portfolio)
+        else:
+            logger.info("reconcile: tracker matches the exchange (%d position(s)).",
+                        len(self.portfolio.positions))
 
     # -- one pass for one symbol -------------------------------------------
     async def run_once(self, symbol: str, now: datetime | None = None) -> list[PipelineResult]:
@@ -374,6 +444,9 @@ class TradingRunner:
             logger.error("Refusing to start LIVE with a withdrawal-capable key.")
             return
         await self.adapter.load_markets()
+        # verify the persisted tracker against reality BEFORE trading (double-buy /
+        # phantom-exit protection after a crash or an out-of-band fill)
+        await self.reconcile_positions()
 
         tasks: list[asyncio.Task] = []
         if self.health is not None:
