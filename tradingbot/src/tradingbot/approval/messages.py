@@ -44,6 +44,16 @@ def render_approval_message(config: Config, intent: OrderIntent, decision: RiskD
         f"est. round-trip fees: {_fmt(decision.round_trip_fee_quote, 4)} {quote}",
         f"net-of-fee target: {_fmt(decision.net_after_fees_quote, 4)} {quote}",
     ]
+    # Risk sizing: capital at risk to the protective stop, in % of account and
+    # absolute terms, plus how far the stop sits. Tighter stop / lower % = safer.
+    if decision.risk_pct_equity is not None:
+        band = ("🟢 low" if decision.risk_pct_equity < 1.0
+                else "🟡 med" if decision.risk_pct_equity < 3.0 else "🔴 high")
+        lines.append(
+            f"*risk: {decision.risk_pct_equity:.2f}% of equity* "
+            f"({_fmt(decision.risk_to_stop_quote)} {quote} to stop)  {band}")
+        if decision.stop_distance_pct is not None:
+            lines.append(f"stop distance: {decision.stop_distance_pct:.2f}% below entry")
     # Weighted-average-cost (VWAP) valuation, when the strategy supplies it.
     wac = intent.metadata.get("vwap") if intent.metadata else None
     if wac is not None:

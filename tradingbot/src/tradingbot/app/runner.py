@@ -79,6 +79,7 @@ class TradingRunner:
         email_sender=None,    # EmailSender | None
         regime_overlay=None,  # CycleRegimeOverlay | None
         position_store=None,  # JsonPositionStore | None — persists positions across restarts
+        decision_log=None,    # DecisionLog | None — records every decision (RL/analysis feed)
     ) -> None:
         self.settings = settings
         self.cfg = settings.config
@@ -97,6 +98,7 @@ class TradingRunner:
         self.email_sender = email_sender
         self.regime_overlay = regime_overlay
         self.position_store = position_store
+        self.decision_log = decision_log
         self._stop = asyncio.Event()
         self._week_first_price: dict[str, float] = {}
         self._last_price: dict[str, float] = {}
@@ -368,9 +370,29 @@ class TradingRunner:
             logger.critical("FILL INVARIANT VIOLATION %s %s: %s (intent: %s)",
                             f.side.value, f.symbol, p, intent.reason)
 
+    def _log_decision(self, r: PipelineResult, now: datetime) -> None:
+        """Record EVERY decision (executed or not) to the decision log — the RL /
+        risk-analysis substrate. Never raises: bookkeeping must not stop trading."""
+        if self.decision_log is None:
+            return
+        d = r.decision
+        try:
+            self.decision_log.record(
+                ts=now, symbol=r.intent.symbol, side=r.intent.side.value,
+                is_entry=r.intent.is_entry, outcome=r.outcome.value,
+                gate=(d.gate.value if d else ""), approved=(d.approved if d else False),
+                notional=(d.notional if d else None), est_price=(d.est_price if d else None),
+                risk_pct=(d.risk_pct_equity if d else None),
+                stop_distance_pct=(d.stop_distance_pct if d else None),
+                reason=r.intent.reason,
+            )
+        except Exception:
+            logger.exception("decision-log write failed (continuing)")
+
     def _apply_fills(self, results: list[PipelineResult], now: datetime) -> None:
         filled_any = False
         for r in results:
+            self._log_decision(r, now)  # capture the full decision stream first
             if r.outcome is not Outcome.EXECUTED or r.execution is None or r.execution.fill is None:
                 continue
             filled_any = True
@@ -390,6 +412,7 @@ class TradingRunner:
                 role=f.role.value, is_entry=intent.is_entry, realized_pnl=realized,
                 reason=intent.reason, valuation_pct=(intent.metadata or {}).get("valuation_pct"),
                 client_order_id=f.client_order_id,
+                risk_pct=(r.decision.risk_pct_equity if r.decision else None),
             )
         if filled_any:
             # a fill moved real balance — the next symbol's floor/sizing checks

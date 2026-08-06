@@ -703,7 +703,7 @@ def _build_runner(settings: Settings):
     from .reporting.email_sender import build_email_sender
     from .reporting.weekly import WeeklyReporter
     from .risk.engine import RiskEngine
-    from .store import SqliteRiskStateStore, TradeLog, make_session_factory
+    from .store import DecisionLog, SqliteRiskStateStore, TradeLog, make_session_factory
     from .strategy import build_strategy
 
     cfg = settings.config
@@ -714,6 +714,7 @@ def _build_runner(settings: Settings):
     sf = make_session_factory(cfg.app.db_url)
     store = SqliteRiskStateStore(sf, daily_reset_utc_hour=cfg.risk.daily_reset_utc_hour)
     trade_log = TradeLog(sf)
+    decision_log = DecisionLog(sf)
 
     adapter = build_adapter(cfg.exchange, settings.secrets)
     strategy = build_strategy(cfg.strategy)
@@ -802,7 +803,7 @@ def _build_runner(settings: Settings):
         event_module=event_module, health=health, reporter=reporter,
         report_deliver=report_deliver, report_path="reports/weekly_latest.md",
         email_sender=email_sender, regime_overlay=regime_overlay,
-        position_store=position_store,
+        position_store=position_store, decision_log=decision_log,
     )
     return runner, bot, signal
 
@@ -847,6 +848,24 @@ def _weekly_report(settings: Settings) -> int:
     sf = make_session_factory(cfg.app.db_url)
     reporter = WeeklyReporter(TradeLog(sf))
     print(reporter.generate(quote=cfg.exchange.quote_currency))
+    return 0
+
+
+def _risk_report(settings: Settings, args) -> int:
+    from .analysis.risk_bands import analyze_risk_bands, render_risk_report
+    from .store import TradeLog, make_session_factory
+
+    cfg = settings.config
+    sf = make_session_factory(cfg.app.db_url)
+    records = TradeLog(sf).all()
+    bands = analyze_risk_bands(records)
+    report = render_risk_report(bands, quote=cfg.exchange.quote_currency)
+    print(report)
+    if args.report:
+        from pathlib import Path
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote risk-band report to %s", args.report)
     return 0
 
 
@@ -915,7 +934,7 @@ def main() -> int:
         choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
                  "regime", "fetch-funding", "fetch-onchain", "cross-asset", "robustness",
-                 "trend-sweep", "portfolio"],
+                 "trend-sweep", "portfolio", "risk-report"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -1015,6 +1034,8 @@ def main() -> int:
         return _trend_sweep(settings, args)
     if args.command == "portfolio":
         return _portfolio(settings, args)
+    if args.command == "risk-report":
+        return _risk_report(settings, args)
     return 2  # pragma: no cover
 
 

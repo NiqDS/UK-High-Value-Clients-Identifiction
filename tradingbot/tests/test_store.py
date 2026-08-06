@@ -4,11 +4,47 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from tradingbot.store import SqliteRiskStateStore, TradeLog, make_session_factory
+from sqlalchemy import text
+
+from tradingbot.store import DecisionLog, SqliteRiskStateStore, TradeLog, make_session_factory
 
 
 def _url(tmp_path) -> str:
     return f"sqlite:///{tmp_path / 'tb.db'}"
+
+
+def test_trade_log_records_risk_pct(tmp_path) -> None:
+    log = TradeLog(make_session_factory(_url(tmp_path)))
+    log.record(ts=_ts(12), symbol="BTC/USD", side="buy", price=100.0, amount=0.4,
+               cost_quote=40.0, fee_quote=0.16, role="maker", is_entry=True, risk_pct=1.7)
+    assert log.all()[0].risk_pct == 1.7
+
+
+def test_decision_log_records_every_decision(tmp_path) -> None:
+    dl = DecisionLog(make_session_factory(_url(tmp_path)))
+    dl.record(ts=_ts(12), symbol="ADA/USDT", side="buy", is_entry=True,
+              outcome="rejected_by_risk", gate="per_trade_risk", approved=False,
+              notional=23.0, risk_pct=6.2, reason="risk-to-stop > budget")
+    dl.record(ts=_ts(13), symbol="ADA/USDT", side="buy", is_entry=True,
+              outcome="executed", gate="ok", approved=True, notional=23.0, risk_pct=0.9)
+    rows = dl.all()
+    assert len(rows) == 2
+    assert rows[0].outcome == "rejected_by_risk" and rows[0].risk_pct == 6.2
+    assert rows[1].approved is True and rows[1].source == "live"
+
+
+def test_migration_adds_risk_pct_to_legacy_trades_table(tmp_path) -> None:
+    # simulate a pre-existing db whose 'trades' table lacks risk_pct
+    url = _url(tmp_path)
+    sf = make_session_factory(url)
+    with sf() as s:
+        s.execute(text("ALTER TABLE trades DROP COLUMN risk_pct"))
+        s.commit()
+    # reopening must back-fill the column (no crash) and accept a risk_pct write
+    log = TradeLog(make_session_factory(url))
+    log.record(ts=_ts(12), symbol="BTC/USD", side="buy", price=100.0, amount=0.4,
+               cost_quote=40.0, fee_quote=0.16, role="maker", is_entry=True, risk_pct=2.5)
+    assert log.all()[0].risk_pct == 2.5
 
 
 def _ts(d=12, h=12) -> datetime:

@@ -111,6 +111,31 @@ def test_render_flags_below_floor() -> None:
     assert "BELOW FLOOR" in msg
 
 
+def test_render_includes_risk_percent() -> None:
+    d = decision()
+    d.risk_pct_equity = 0.62
+    d.risk_to_stop_quote = 3.1
+    d.stop_distance_pct = 7.8
+    msg = render_approval_message(Config(), intent(), d)
+    assert "risk: 0.62% of equity" in msg
+    assert "🟢 low" in msg                     # <1% -> low band
+    assert "stop distance: 7.80%" in msg
+
+
+def test_render_risk_band_high() -> None:
+    d = decision()
+    d.risk_pct_equity = 4.5
+    d.risk_to_stop_quote = 22.5
+    msg = render_approval_message(Config(), intent(), d)
+    assert "🔴 high" in msg
+
+
+def test_render_omits_risk_when_absent() -> None:
+    # exits / no-stop entries carry no risk % — the line must not appear
+    msg = render_approval_message(Config(), intent(), decision())
+    assert "risk:" not in msg
+
+
 def test_render_includes_vwap_valuation_when_present() -> None:
     i = OrderIntent(symbol="BTC/USD", side=Side.BUY, amount=0.4, price=100.0,
                     take_profit_price=102.0,

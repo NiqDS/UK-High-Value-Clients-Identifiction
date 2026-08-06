@@ -2,6 +2,6 @@
 
 from .db import make_session_factory
 from .state import SqliteRiskStateStore
-from .trade_log import TradeLog
+from .trade_log import DecisionLog, TradeLog
 
-__all__ = ["make_session_factory", "SqliteRiskStateStore", "TradeLog"]
+__all__ = ["make_session_factory", "SqliteRiskStateStore", "TradeLog", "DecisionLog"]

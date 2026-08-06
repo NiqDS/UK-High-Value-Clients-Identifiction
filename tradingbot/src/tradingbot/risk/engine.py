@@ -89,6 +89,10 @@ class RiskDecision:
     projected_free_quote: float | None = None
     round_trip_fee_quote: float | None = None
     net_after_fees_quote: float | None = None
+    # Risk sizing (entries with a stop): capital at risk if the stop fills.
+    risk_to_stop_quote: float | None = None     # units * |entry - stop|
+    risk_pct_equity: float | None = None        # that, as % of account equity
+    stop_distance_pct: float | None = None      # |entry - stop| / entry * 100
 
     @classmethod
     def reject(cls, gate: RiskGate, reason: str, **kw) -> "RiskDecision":
@@ -141,6 +145,21 @@ class RiskEngine:
         notional = intent.notional(est_price)
         fee_pct = self._effective_fee_pct(snapshot)
         rt_fee_quote = self._round_trip_fee_quote(intent, est_price, fee_pct)
+
+        # Risk sizing: capital at risk if the stop fills (entries with a stop).
+        # Surfaced on the decision so the approval message shows it and the trade
+        # log records it — the substrate for risk-based sizing and the
+        # "which risk levels lose most" analysis.
+        risk_to_stop = risk_pct = stop_dist_pct = None
+        if intent.stop_price is not None and est_price > 0:
+            risk_to_stop = abs(intent.amount) * abs(est_price - intent.stop_price)
+            stop_dist_pct = abs(est_price - intent.stop_price) / est_price * 100.0
+            if snapshot.equity_quote > 0:
+                risk_pct = risk_to_stop / snapshot.equity_quote * 100.0
+
+        def _risk_kw() -> dict:
+            return {"risk_to_stop_quote": risk_to_stop, "risk_pct_equity": risk_pct,
+                    "stop_distance_pct": stop_dist_pct}
 
         # EXIT FAST-PATH. The gates below bound risk-ADDING intents. An exit on a
         # long-only book REDUCES exposure, and blocking it strands a live position
@@ -236,16 +255,15 @@ class RiskEngine:
                 est_price=est_price, notional=notional,
             )
 
-        # 11. per-trade risk cap (needs a stop to evaluate)
-        if intent.is_entry and intent.stop_price is not None and snapshot.equity_quote > 0:
-            risk_quote = abs(intent.amount) * abs(est_price - intent.stop_price)
+        # 11. per-trade risk cap (needs a stop to evaluate; risk_to_stop precomputed)
+        if risk_to_stop is not None and snapshot.equity_quote > 0:
             budget = snapshot.equity_quote * risk.per_trade_risk_pct / 100.0
-            if risk_quote > budget:
+            if risk_to_stop > budget:
                 return RiskDecision.reject(
                     RiskGate.PER_TRADE_RISK,
-                    f"risk-to-stop {risk_quote:.2f} > budget {budget:.2f} "
+                    f"risk-to-stop {risk_to_stop:.2f} > budget {budget:.2f} "
                     f"({risk.per_trade_risk_pct}% of equity)",
-                    est_price=est_price, notional=notional,
+                    est_price=est_price, notional=notional, **_risk_kw(),
                 )
 
         # 12. spread guard
@@ -296,6 +314,7 @@ class RiskEngine:
             requires_approval=requires_approval,
             est_price=est_price, notional=notional,
             projected_free_quote=proj_free, round_trip_fee_quote=rt_fee_quote,
+            **_risk_kw(),
         )
 
     # -- helpers ------------------------------------------------------------
