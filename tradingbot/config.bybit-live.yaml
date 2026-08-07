@@ -121,6 +121,14 @@ funding:
 mvrv:
   enabled: false
 
+# --- Weekly evidence-driven learning loop (advisory; never auto-applies) -----
+learning:
+  enabled: true
+  bad_trades_dir: bad_trades   # own losing trades + your uploaded external logs
+  weekly: true                 # assess on the weekly-report cadence
+  min_trades_per_bucket: 5     # don't draw conclusions below this (noise vs signal)
+  write_own_losers: true       # append own losing exits to the folder for the record
+
 # --- Telegram approval (see docs/TELEGRAM_SETUP.md for the 5-minute setup). --
 # Semantics (enforced in code):
 #   * approval_threshold_quote 0.0 => every ENTRY needs your approval tap.

@@ -389,6 +389,20 @@ class TradingRunner:
         except Exception:
             logger.exception("decision-log write failed (continuing)")
 
+    def _record_own_loss(self, fill, intent, entry_price, net_pnl: float, now: datetime) -> None:
+        """Append a losing exit to the bad-trades folder (a human record; the
+        weekly loop still assesses own trades from the full DB)."""
+        lc = self.cfg.learning
+        if not (lc.enabled and lc.write_own_losers):
+            return
+        from ..learning.samples import append_own_loss
+        append_own_loss(
+            lc.bad_trades_dir, symbol=fill.symbol, side=fill.side.value,
+            entry_price=entry_price or 0.0, exit_price=fill.price, pnl=net_pnl,
+            risk_pct=None, reason=intent.reason, ts=now.isoformat(),
+            bucket=now.strftime("%GW%V"),
+        )
+
     def _apply_fills(self, results: list[PipelineResult], now: datetime) -> None:
         filled_any = False
         for r in results:
@@ -399,13 +413,20 @@ class TradingRunner:
             f = r.execution.fill
             self._validate_fill(f, r.intent)
             intent = r.intent
+            entry_price = None
+            if f.side == Side.SELL:
+                held = self.portfolio.get(f.symbol)
+                entry_price = held.entry_price if held else None
             realized = self.portfolio.on_fill(
                 f.symbol, f.side, f.price, f.amount, now,
                 take_profit=intent.take_profit_price, stop=intent.stop_price,
                 trail_distance=(intent.metadata or {}).get("trail_distance"),
             )
             if f.side == Side.SELL:
-                self.store.record_realized_pnl(now, realized - f.fee_quote)
+                net = realized - f.fee_quote
+                self.store.record_realized_pnl(now, net)
+                if net < 0:
+                    self._record_own_loss(f, intent, entry_price, net, now)
             self.trade_log.record(
                 ts=f.timestamp, symbol=f.symbol, side=f.side.value, price=f.price,
                 amount=f.amount, cost_quote=f.cost_quote, fee_quote=f.fee_quote,
@@ -455,6 +476,39 @@ class TradingRunner:
         self._week_first_price = dict(self._last_price)  # reset the benchmark window
         return text
 
+    async def emit_learning(self, now: datetime | None = None) -> str | None:
+        """Weekly learning assessment: own trades (full DB) + new external logs in
+        the bad-trades folder -> candidate adjustments. Delivered to Telegram and
+        written to reports/. Advisory only — never changes config."""
+        lc = self.cfg.learning
+        if not lc.enabled:
+            return None
+        try:
+            from ..learning.loop import assess, paired_samples_from_db, render_learning_report
+            from ..learning.samples import scan_folder
+
+            own = paired_samples_from_db(self.trade_log.all())
+            external = [s for s in scan_folder(lc.bad_trades_dir, only_new=True)[0]
+                        if s.source != "live"]
+            report = render_learning_report(assess(
+                own, external, min_trades=lc.min_trades_per_bucket,
+                quote=self.cfg.exchange.quote_currency))
+        except Exception:
+            logger.exception("weekly learning assessment failed")
+            return None
+        try:
+            from pathlib import Path
+            Path("reports").mkdir(parents=True, exist_ok=True)
+            Path("reports/learning_latest.md").write_text(report)
+        except Exception:
+            logger.exception("could not write learning report")
+        if self.report_deliver is not None:
+            try:
+                await self.report_deliver(report)
+            except Exception:
+                logger.exception("learning report telegram delivery failed")
+        return report
+
     # -- main loop ----------------------------------------------------------
     def request_stop(self) -> None:
         self._stop.set()
@@ -495,6 +549,8 @@ class TradingRunner:
                 now = datetime.now(timezone.utc)
                 if next_report is not None and now >= next_report:
                     await self.emit_weekly_report(now)
+                    if self.cfg.learning.enabled and self.cfg.learning.weekly:
+                        await self.emit_learning(now)
                     next_report = next_report_time(now, rep.weekly_day, rep.weekly_hour_utc)
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=interval)

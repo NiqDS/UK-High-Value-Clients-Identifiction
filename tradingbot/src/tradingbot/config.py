@@ -131,6 +131,19 @@ class KillSwitchConfig(BaseModel):
     pull_resting_orders: bool = True
 
 
+class LearningConfig(BaseModel):
+    """Weekly evidence-driven learning loop. Reads the week's own trades (from the
+    DB) plus any logs dropped in ``bad_trades_dir`` (own losing trades the bot
+    writes there, and external bots' logs you upload), assesses them, and emits
+    CANDIDATE parameter adjustments — never auto-applied (backtest first)."""
+
+    enabled: bool = True
+    bad_trades_dir: str = "bad_trades"
+    weekly: bool = True                              # run on the weekly report cadence
+    min_trades_per_bucket: int = Field(default=5, ge=1)  # below this = 'noise, not signal'
+    write_own_losers: bool = True                    # append own losing exits to the folder
+
+
 class RegimeConfig(BaseModel):
     enabled: bool = False
     cadence_hours: int = Field(default=24, gt=0)
@@ -306,6 +319,7 @@ class Config(BaseModel):
     regime: RegimeConfig = Field(default_factory=RegimeConfig)
     funding: FundingConfig = Field(default_factory=FundingConfig)
     mvrv: MvrvConfig = Field(default_factory=MvrvConfig)
+    learning: LearningConfig = Field(default_factory=LearningConfig)
     telegram: TelegramConfig = Field(default_factory=TelegramConfig)
     reporting: ReportingConfig = Field(default_factory=ReportingConfig)
     app: AppConfig = Field(default_factory=AppConfig)

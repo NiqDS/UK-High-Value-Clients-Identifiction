@@ -851,6 +851,32 @@ def _weekly_report(settings: Settings) -> int:
     return 0
 
 
+def _learn(settings: Settings, args) -> int:
+    from .learning.loop import assess, paired_samples_from_db, render_learning_report
+    from .learning.samples import scan_folder
+    from .store import TradeLog, make_session_factory
+
+    cfg = settings.config
+    lc = cfg.learning
+    # own trades from the COMPLETE db (wins + losses -> correct win rates)
+    own = paired_samples_from_db(TradeLog(make_session_factory(cfg.app.db_url)).all())
+    # external logs from the folder (skip our own_losses record to avoid double count)
+    folder_samples, processed = scan_folder(lc.bad_trades_dir, only_new=not args.all)
+    external = [s for s in folder_samples if s.source != "live"]
+    logger.info("learn: %d own (db) + %d external from %d new file(s): %s",
+                len(own), len(external), len(processed), ", ".join(processed) or "-")
+    report = render_learning_report(
+        assess(own, external, min_trades=lc.min_trades_per_bucket,
+               quote=cfg.exchange.quote_currency))
+    print(report)
+    if args.report:
+        from pathlib import Path
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote learning report to %s", args.report)
+    return 0
+
+
 def _risk_report(settings: Settings, args) -> int:
     from .analysis.risk_bands import analyze_risk_bands, render_risk_report
     from .store import TradeLog, make_session_factory
@@ -934,7 +960,7 @@ def main() -> int:
         choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
                  "regime", "fetch-funding", "fetch-onchain", "cross-asset", "robustness",
-                 "trend-sweep", "portfolio", "risk-report"],
+                 "trend-sweep", "portfolio", "risk-report", "learn"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -985,6 +1011,8 @@ def main() -> int:
                         help="portfolio: gate longs on the slow-SMA regime (no longs below it)")
     parser.add_argument("--trend-period", type=int, default=200,
                         help="portfolio: SMA length for the regime gate (default 200 = ~200d)")
+    parser.add_argument("--all", action="store_true",
+                        help="learn: re-assess ALL files in the bad-trades folder, not just new ones")
     parser.add_argument("--momentum", type=int, default=0,
                         help="portfolio: cross-sectional momentum lookback in bars "
                              "(0 = off; e.g. 60 = rank coins by trailing 60-day return)")
@@ -1036,6 +1064,8 @@ def main() -> int:
         return _portfolio(settings, args)
     if args.command == "risk-report":
         return _risk_report(settings, args)
+    if args.command == "learn":
+        return _learn(settings, args)
     return 2  # pragma: no cover
 
 
