@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from tradingbot.backtest.engine import BacktestConfig
-from tradingbot.backtest.portfolio import portfolio_backtest, risk_sweep_report
+from tradingbot.backtest.portfolio import (
+    deploy_sweep_report,
+    portfolio_backtest,
+    risk_sweep_report,
+)
 from tradingbot.backtest.synthetic import synthetic_candles
 from tradingbot.config import StrategyConfig
 from tradingbot.domain import OrderIntent, OrderType, Side
@@ -108,3 +112,30 @@ def test_over_betting_is_capped_not_rewarded() -> None:
     r_extreme = portfolio_backtest(_assets(), base, bt, risk_sizing_pct=100.0)
     # 4x the risk must not give materially more return once deployment is capped
     assert r_extreme.net_pct <= r_hi.net_pct * 1.05 + 1.0
+
+
+def test_deploy_pct_scales_return_and_drawdown_together() -> None:
+    # halving the deployment fraction leaves the rest as idle cash, so both return%
+    # and drawdown% shrink roughly linearly -> return/dd stays about the same.
+    base = StrategyConfig(donchian_entry_period=20, donchian_exit_period=10)
+    bt = BacktestConfig(initial_equity=6000.0, fee_pct=0.6, slippage_pct=0.05)
+    full = portfolio_backtest(_assets(), base, bt, deploy_pct=100.0)
+    half = portfolio_backtest(_assets(), base, bt, deploy_pct=50.0)
+    # half deployment earns less and draws down less than full
+    assert abs(half.net_pct) < abs(full.net_pct)
+    assert half.maxdd_pct <= full.maxdd_pct + 1e-6
+    # return/dd ratio is roughly preserved (efficiency ~flat, not a free lunch)
+    if full.maxdd_pct > 0 and half.maxdd_pct > 0:
+        rr_full = full.net_pct / full.maxdd_pct
+        rr_half = half.net_pct / half.maxdd_pct
+        assert rr_half == pytest.approx(rr_full, rel=0.35)
+
+
+def test_deploy_sweep_report_lists_levels_and_reads() -> None:
+    base = StrategyConfig(donchian_entry_period=20, donchian_exit_period=10)
+    bt = BacktestConfig(initial_equity=6000.0, fee_pct=0.6, slippage_pct=0.05)
+    report = deploy_sweep_report(_assets(), base, bt, [100.0, 50.0, 25.0], label="test")
+    assert "Deployment-fraction sweep" in report
+    assert "~real dd%" in report
+    for r in ("   100  |", "    50  |", "    25  |"):
+        assert r in report

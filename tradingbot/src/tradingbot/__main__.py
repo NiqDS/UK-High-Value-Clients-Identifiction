@@ -887,6 +887,42 @@ def _risk_sweep(settings: Settings, args) -> int:
     return 0
 
 
+def _deploy_sweep(settings: Settings, args) -> int:
+    from pathlib import Path
+
+    from .backtest.data import load_csv
+    from .backtest.engine import BacktestConfig
+    from .backtest.portfolio import deploy_sweep_report
+
+    if not args.asset:
+        logger.error("pass --asset LABEL=path.csv for each coin (e.g. "
+                     "--asset BTC=data/btc_1d_long.csv --asset ETH=data/eth_1d_long.csv)")
+        return 2
+    assets = []
+    for spec in args.asset:
+        label, _, rest = spec.partition("=")
+        path = rest.split("@", 1)[0] if rest else ""
+        if not label or not path or not Path(path).exists():
+            logger.error("bad/missing --asset %r", spec)
+            return 2
+        candles = load_csv(path)
+        if len(candles) < 50:
+            logger.error("%s has only %d bars", path, len(candles))
+            return 2
+        assets.append((label, candles))
+    levels = [float(x) for x in args.deploy_levels.split(",")] if args.deploy_levels else \
+        [100.0, 75.0, 50.0, 33.0, 25.0, 15.0]
+    bt = BacktestConfig(initial_equity=args.equity, fee_pct=args.fee, slippage_pct=args.slippage)
+    report = deploy_sweep_report(assets, settings.config.strategy, bt, levels,
+                                 weight_mode=args.weight_mode, label=f"{len(assets)} coins")
+    print(report)
+    if args.report:
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote deploy-sweep report to %s", args.report)
+    return 0
+
+
 def _learn(settings: Settings, args) -> int:
     from .learning.loop import assess, paired_samples_from_db, render_learning_report
     from .learning.samples import scan_folder
@@ -996,7 +1032,8 @@ def main() -> int:
         choices=["check-config", "healthcheck", "paper-run", "backtest", "run",
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
                  "regime", "fetch-funding", "fetch-onchain", "cross-asset", "robustness",
-                 "trend-sweep", "portfolio", "risk-report", "learn", "risk-sweep"],
+                 "trend-sweep", "portfolio", "risk-report", "learn", "risk-sweep",
+                 "deploy-sweep"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -1052,6 +1089,9 @@ def main() -> int:
     parser.add_argument("--risk-levels", default=None,
                         help="risk-sweep: comma-separated risk%% levels to test "
                              "(default 0.5,1,2,3,5,8,12,20)")
+    parser.add_argument("--deploy-levels", default=None,
+                        help="deploy-sweep: comma-separated deployment%% levels to test "
+                             "(default 100,75,50,33,25,15)")
     parser.add_argument("--momentum", type=int, default=0,
                         help="portfolio: cross-sectional momentum lookback in bars "
                              "(0 = off; e.g. 60 = rank coins by trailing 60-day return)")
@@ -1107,6 +1147,8 @@ def main() -> int:
         return _learn(settings, args)
     if args.command == "risk-sweep":
         return _risk_sweep(settings, args)
+    if args.command == "deploy-sweep":
+        return _deploy_sweep(settings, args)
     return 2  # pragma: no cover
 
 

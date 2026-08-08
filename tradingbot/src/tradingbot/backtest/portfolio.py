@@ -168,6 +168,7 @@ def portfolio_backtest(
     momentum_lookback: int = 0,
     momentum_top_k: int = 0,
     risk_sizing_pct: float = 0.0,
+    deploy_pct: float = 100.0,
 ) -> PortfolioResult:
     """Run the Donchian trend index over the common window of ``assets``.
 
@@ -192,8 +193,9 @@ def portfolio_backtest(
     raw: list[tuple[str, float, "object", float, float]] = []  # (label, alloc, res, exp, bh)
     for label, candles in aligned.items():
         alloc = total_initial * w.get(label, 0.0)
-        # full-deployment sizing: a long uses the whole sleeve
-        scfg = base.model_copy(update={"target_notional_quote": alloc})
+        # a long deploys deploy_pct% of the sleeve (100 = full); the rest stays idle
+        # cash, which dilutes BOTH return% and drawdown% roughly linearly
+        scfg = base.model_copy(update={"target_notional_quote": alloc * deploy_pct / 100.0})
         sbt = BacktestConfig(
             initial_equity=alloc, fee_pct=bt.fee_pct, slippage_pct=bt.slippage_pct,
         )
@@ -366,4 +368,40 @@ def risk_sweep_report(
                  "bull-regime + survivor-biased (real bears run ~2x worse).")
     lines.append("- Industry-standard per-trade risk is 1-3%. For a small real account, start "
                  "low single digits; the low rows here show the drawdown that buys.")
+    return "\n".join(lines)
+
+
+def deploy_sweep_report(
+    assets: list[tuple[str, list[Candle]]], base: StrategyConfig, bt: BacktestConfig,
+    deploy_levels: list[float], weight_mode: str = "equal", label: str = "",
+) -> str:
+    """Sweep the DEPLOYMENT FRACTION — what % of each sleeve a long deploys (the
+    rest sits in idle cash). Because idle cash dilutes both return% and drawdown%
+    roughly linearly, this is the honest lever for choosing a drawdown you can sit
+    through. Report each level's return / max-drawdown so you pick by tolerance."""
+    rows: list[tuple[float, PortfolioResult]] = []
+    for d in sorted(deploy_levels, reverse=True):
+        res = portfolio_backtest(assets, base, bt, weight_mode=weight_mode, deploy_pct=d)
+        rows.append((d, res))
+    lines = [
+        f"# Deployment-fraction sweep — {label}".rstrip(),
+        f"{len(assets)} coins, {weight_mode}-weight | fees {bt.fee_pct}%/side, "
+        f"slippage {bt.slippage_pct}%/fill | a long deploys D% of its sleeve, rest idle cash",
+        "",
+        "deploy% | net%    | maxdd% | ~real dd% | return/dd | trades",
+    ]
+    for d, res in rows:
+        rr = res.net_pct / res.maxdd_pct if res.maxdd_pct > 0 else 0.0
+        lines.append(f"{d:6.0f}  | {res.net_pct:+7.2f} | {res.maxdd_pct:5.1f}  | "
+                     f"{res.maxdd_pct * 2:7.0f}   | {rr:8.2f}  | {res.trades:5d}")
+    lines += ["", "### Read",
+              "- Deployment scales return AND drawdown together (near-linear) — return/dd is "
+              "roughly FLAT, so this isn't about efficiency; it's about how much drawdown you "
+              "can stomach.",
+              "- `~real dd%` doubles the modelled figure for the bull/survivor bias — plan around "
+              "THAT, not the backtest number.",
+              "- Pick the deploy% whose ~real dd you can sit through, then set each sleeve's "
+              "target_notional_quote = (deploy%/100) x (capital / 7).",
+              "- More launch capital doesn't change these %s — keep the same deploy%, just scale "
+              "the absolute sleeve sizes up."]
     return "\n".join(lines)
