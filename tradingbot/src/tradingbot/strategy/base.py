@@ -20,6 +20,8 @@ class MarketData:
     candles: list[Candle] = field(default_factory=list)
     ticker: Ticker | None = None
     holding: bool = False  # True when a position is currently open (enables force-exit)
+    equity: float | None = None  # current marked equity, for compounding risk sizing
+                                 # (populated by the backtester; None live/unset)
 
     @property
     def closes(self) -> list[float]:

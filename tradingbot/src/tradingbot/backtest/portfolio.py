@@ -324,35 +324,46 @@ def risk_sweep_report(
     assets: list[tuple[str, list[Candle]]], base: StrategyConfig, bt: BacktestConfig,
     risk_levels: list[float], weight_mode: str = "equal", label: str = "",
 ) -> str:
-    """Sweep the per-trade RISK LIMIT (% of sleeve risked to the stop) over the
-    common window and report each level's return / max-drawdown, so the optimal
-    risk-adjusted level is visible. Each level re-runs the basket with risk-based
-    sizing; return/maxdd (higher = better) is the selection metric."""
-    rows: list[tuple[float, PortfolioResult]] = []
+    """Sweep the per-trade RISK LIMIT (% risked to the stop) over the window with
+    COMPOUNDING sizing — each entry sizes off the sleeve's CURRENT equity, so
+    drawdowns shrink the base and over-betting is punished (unlike a naive
+    fixed-base sweep, whose return/maxdd rises forever and just picks the grid
+    edge). Because the engine also caps deployment at cash (no leverage), returns
+    SATURATE once risk% is large enough to fully deploy — beyond that, more risk
+    changes nothing. So the honest output is: (1) the drawdown you get at each
+    level, and (2) where it saturates. You then pick by drawdown tolerance."""
+    rows: list[tuple[float, PortfolioResult, float]] = []
     for r in sorted(risk_levels):
         res = portfolio_backtest(assets, base, bt, weight_mode=weight_mode, risk_sizing_pct=r)
-        rows.append((r, res))
+        rr = res.net_pct / res.maxdd_pct if res.maxdd_pct > 0 else 0.0
+        rows.append((r, res, rr))
     lines = [
-        f"# Risk-limit sweep — {label}".rstrip(),
+        f"# Risk-limit sweep (compounding) — {label}".rstrip(),
         f"{len(assets)} coins, {weight_mode}-weight | fees {bt.fee_pct}%/side, "
-        f"slippage {bt.slippage_pct}%/fill | each entry risks R% of its sleeve to the stop",
+        f"slippage {bt.slippage_pct}%/fill | each entry risks R% of CURRENT equity to the stop",
         "",
         "risk% | net%    | maxdd% | return/dd | exposure% | trades",
     ]
-    best = None
-    for r, res in rows:
-        rr = res.net_pct / res.maxdd_pct if res.maxdd_pct > 0 else 0.0
-        if best is None or rr > best[1]:
-            best = (r, rr, res)
+    for r, res, rr in rows:
         lines.append(f"{r:5.1f} | {res.net_pct:+7.2f} | {res.maxdd_pct:5.1f}  | "
                      f"{rr:8.2f}  | {res.exposure_pct:8.0f}  | {res.trades:5d}")
-    lines += ["", "### Read"]
-    if best:
-        r, rr, res = best
-        lines.append(f"- Best risk-adjusted limit: **{r:.1f}% per trade** "
-                     f"(return/maxdd {rr:.2f}: {res.net_pct:+.1f}% over {res.maxdd_pct:.1f}% dd).")
-        lines.append("- Higher risk% = bigger positions = more return AND more drawdown; the "
-                     "peak return/maxdd is the sweet spot. Set risk-based sizing there.")
-    lines.append("- Bull-regime + survivor-biased history (see RESEARCH_REPORT) — treat the "
-                 "level as a starting point, not a guarantee; re-check on new data.")
+
+    # detect the deployment-cap plateau: the lowest risk% whose net% is within 1%
+    # of the maximum (beyond it, the no-leverage cap makes higher risk a no-op)
+    max_net = max((res.net_pct for _, res, _ in rows), default=0.0)
+    cap_at = next((r for r, res, _ in rows if res.net_pct >= max_net - abs(max_net) * 0.01), None)
+
+    lines += ["", "### Read (how to use this — NOT 'pick the highest')"]
+    lines.append("- Returns SATURATE, they don't ramp: the no-leverage cap means beyond a "
+                 "point, more risk% just maps to full deployment and changes nothing.")
+    if cap_at is not None:
+        capped = next(res for r, res, _ in rows if r == cap_at)
+        lines.append(f"- Deployment cap reached around **{cap_at:.1f}% risk** "
+                     f"(~{capped.net_pct:+.0f}% / {capped.maxdd_pct:.0f}% dd). Higher settings are "
+                     f"a no-op — do NOT set risk there thinking it earns more.")
+    lines.append("- CHOOSE BY DRAWDOWN TOLERANCE, not max return/dd. Read across to the drawdown "
+                 "you can stomach — then HALVE your tolerance, because this history is "
+                 "bull-regime + survivor-biased (real bears run ~2x worse).")
+    lines.append("- Industry-standard per-trade risk is 1-3%. For a small real account, start "
+                 "low single digits; the low rows here show the drawdown that buys.")
     return "\n".join(lines)

@@ -168,12 +168,17 @@ class Backtester:
                     close(pos.take_profit * (1 - slip), bar.timestamp, "take-profit")
 
             # 3. mark equity at the close
-            equity_curve.append(cash + (pos.units * bar.close if pos else 0.0))
+            marked_equity = cash + (pos.units * bar.close if pos else 0.0)
+            equity_curve.append(marked_equity)
 
-            # 4. generate signals using ONLY data up to and including this bar
+            # 4. generate signals using ONLY data up to and including this bar.
+            #    Pass the marked equity so risk sizing can COMPOUND (size off the
+            #    current book, not a fixed base) — drawdowns then shrink the base
+            #    and over-betting is punished, the whole point of the risk sweep.
             md = MarketData(
                 symbol=symbol, candles=seen,
                 ticker=_ticker_at(symbol, bar.close), holding=pos is not None,
+                equity=marked_equity,
             )
             signals = strategy.generate_signals(md)
             if signals:

@@ -30,7 +30,11 @@ class RiskSizedStrategy(Strategy):
         self.risk_pct = risk_pct
 
     def generate_signals(self, market: MarketData) -> list[OrderIntent]:
-        budget = self.equity * self.risk_pct / 100.0
+        # COMPOUND: size off the current marked equity when the backtester supplies
+        # it (drawdowns shrink the base, over-betting is punished); fall back to the
+        # fixed starting equity otherwise. Equity can't go below 0.
+        equity = market.equity if market.equity is not None else self.equity
+        budget = max(equity, 0.0) * self.risk_pct / 100.0
         out: list[OrderIntent] = []
         for s in self.base.generate_signals(market):
             if s.is_entry and s.stop_price is not None and s.price:

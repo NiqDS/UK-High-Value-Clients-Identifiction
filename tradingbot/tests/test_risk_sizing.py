@@ -77,11 +77,34 @@ def test_portfolio_risk_sizing_runs() -> None:
     assert res.bars > 0 and res.trades >= 0
 
 
-def test_risk_sweep_report_ranks_levels() -> None:
+def test_compounding_sizes_off_market_equity() -> None:
+    # when the backtester supplies a marked equity, sizing compounds off IT, not
+    # the fixed starting equity
+    from tradingbot.exchange.models import Candle
+    sized = RiskSizedStrategy(_Entry(), equity=1000.0, risk_pct=2.0)
+    c = [Candle(0, 100, 100, 100, 100, 1)]
+    md = MarketData("X", c, Ticker("X", 100, 100, 100, 1, 1, 0), holding=False, equity=2000.0)
+    # risk 2% of the CURRENT 2000 = 40; stop distance 10 -> 4.0 units (not 2.0)
+    assert sized.generate_signals(md)[0].amount == pytest.approx(4.0)
+
+
+def test_risk_sweep_report_reframes_and_lists_levels() -> None:
     base = StrategyConfig(donchian_entry_period=20, donchian_exit_period=10)
     bt = BacktestConfig(initial_equity=6000.0, fee_pct=0.6, slippage_pct=0.05)
     report = risk_sweep_report(_assets(), base, bt, [1.0, 3.0, 8.0], label="test")
-    assert "Risk-limit sweep" in report
-    assert "Best risk-adjusted limit" in report
+    assert "Risk-limit sweep (compounding)" in report
+    assert "CHOOSE BY DRAWDOWN TOLERANCE" in report
+    assert "NOT 'pick the highest'" in report
     for r in ("  1.0 |", "  3.0 |", "  8.0 |"):
         assert r in report
+
+
+def test_over_betting_is_capped_not_rewarded() -> None:
+    # compounding + no-leverage cap: a very high risk% must NOT produce a wildly
+    # larger return than a high-but-reasonable one (it saturates at full deploy)
+    base = StrategyConfig(donchian_entry_period=20, donchian_exit_period=10)
+    bt = BacktestConfig(initial_equity=6000.0, fee_pct=0.6, slippage_pct=0.05)
+    r_hi = portfolio_backtest(_assets(), base, bt, risk_sizing_pct=25.0)
+    r_extreme = portfolio_backtest(_assets(), base, bt, risk_sizing_pct=100.0)
+    # 4x the risk must not give materially more return once deployment is capped
+    assert r_extreme.net_pct <= r_hi.net_pct * 1.05 + 1.0
