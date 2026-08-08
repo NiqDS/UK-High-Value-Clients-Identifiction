@@ -167,6 +167,7 @@ def portfolio_backtest(
     weights: dict[str, float] | None = None,
     momentum_lookback: int = 0,
     momentum_top_k: int = 0,
+    risk_sizing_pct: float = 0.0,
 ) -> PortfolioResult:
     """Run the Donchian trend index over the common window of ``assets``.
 
@@ -201,6 +202,12 @@ def portfolio_backtest(
             from ..strategy.momentum import MomentumGatedStrategy
 
             strategy = MomentumGatedStrategy(strategy, label, rank)
+        if risk_sizing_pct > 0:
+            # size each entry to risk `risk_sizing_pct`% of the sleeve to its stop
+            # (instead of full deployment); the engine still caps at cash
+            from ..strategy.risk_sizing import RiskSizedStrategy
+
+            strategy = RiskSizedStrategy(strategy, equity=alloc, risk_pct=risk_sizing_pct)
         res = Backtester(sbt).run(candles, strategy, symbol=label)
         sleeve_curves.append(res.equity_curve)
         exp = _exposure_pct(res.trades, [c.timestamp for c in candles])
@@ -310,4 +317,42 @@ def portfolio_report(result: PortfolioResult, label: str = "") -> str:
         "Donchian is long-only: it can't short the downtrend, so 'spotting the bear' "
         "shows up as an early channel exit + low exposure, NOT a short profit.",
     ]
+    return "\n".join(lines)
+
+
+def risk_sweep_report(
+    assets: list[tuple[str, list[Candle]]], base: StrategyConfig, bt: BacktestConfig,
+    risk_levels: list[float], weight_mode: str = "equal", label: str = "",
+) -> str:
+    """Sweep the per-trade RISK LIMIT (% of sleeve risked to the stop) over the
+    common window and report each level's return / max-drawdown, so the optimal
+    risk-adjusted level is visible. Each level re-runs the basket with risk-based
+    sizing; return/maxdd (higher = better) is the selection metric."""
+    rows: list[tuple[float, PortfolioResult]] = []
+    for r in sorted(risk_levels):
+        res = portfolio_backtest(assets, base, bt, weight_mode=weight_mode, risk_sizing_pct=r)
+        rows.append((r, res))
+    lines = [
+        f"# Risk-limit sweep — {label}".rstrip(),
+        f"{len(assets)} coins, {weight_mode}-weight | fees {bt.fee_pct}%/side, "
+        f"slippage {bt.slippage_pct}%/fill | each entry risks R% of its sleeve to the stop",
+        "",
+        "risk% | net%    | maxdd% | return/dd | exposure% | trades",
+    ]
+    best = None
+    for r, res in rows:
+        rr = res.net_pct / res.maxdd_pct if res.maxdd_pct > 0 else 0.0
+        if best is None or rr > best[1]:
+            best = (r, rr, res)
+        lines.append(f"{r:5.1f} | {res.net_pct:+7.2f} | {res.maxdd_pct:5.1f}  | "
+                     f"{rr:8.2f}  | {res.exposure_pct:8.0f}  | {res.trades:5d}")
+    lines += ["", "### Read"]
+    if best:
+        r, rr, res = best
+        lines.append(f"- Best risk-adjusted limit: **{r:.1f}% per trade** "
+                     f"(return/maxdd {rr:.2f}: {res.net_pct:+.1f}% over {res.maxdd_pct:.1f}% dd).")
+        lines.append("- Higher risk% = bigger positions = more return AND more drawdown; the "
+                     "peak return/maxdd is the sweet spot. Set risk-based sizing there.")
+    lines.append("- Bull-regime + survivor-biased history (see RESEARCH_REPORT) — treat the "
+                 "level as a starting point, not a guarantee; re-check on new data.")
     return "\n".join(lines)
