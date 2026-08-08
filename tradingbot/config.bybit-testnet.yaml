@@ -104,8 +104,8 @@ events:
 kill_switch:
   enabled: true
   rolling_window_minutes: 30
-  price_velocity_sigma: 6.0
-  volume_spike_sigma: 6.0
+  price_velocity_ratio: 5.0        # latest move >= 5x the median recent move
+  volume_spike_ratio: 8.0          # latest volume >= 8x the median recent volume
   cooldown_minutes: 1440
   pull_resting_orders: true
 

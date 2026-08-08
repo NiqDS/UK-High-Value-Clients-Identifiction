@@ -102,8 +102,8 @@ events:
 kill_switch:
   enabled: true
   rolling_window_minutes: 30
-  price_velocity_sigma: 4.0         # N-sigma price move over the window triggers a halt
-  volume_spike_sigma: 4.0
+  price_velocity_ratio: 5.0        # latest move >= 5x the median recent move
+  volume_spike_ratio: 8.0          # latest volume >= 8x the median recent volume
   cooldown_minutes: 60              # volatility must normalize this long before auto-resume
   pull_resting_orders: true
 

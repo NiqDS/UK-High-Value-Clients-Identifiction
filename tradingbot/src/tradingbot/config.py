@@ -124,9 +124,12 @@ class EventConfig(BaseModel):
 
 class KillSwitchConfig(BaseModel):
     enabled: bool = True
-    rolling_window_minutes: int = Field(default=30, gt=0)
-    price_velocity_sigma: float = Field(default=4.0, gt=0.0)
-    volume_spike_sigma: float = Field(default=4.0, gt=0.0)
+    rolling_window_minutes: int = Field(default=30, gt=0)  # bars kept per symbol
+    # Ratio thresholds vs the MEDIAN of the recent window (median is robust to
+    # heavy tails, unlike a z-score/sigma which blows up on spiky volume). A
+    # trigger reads e.g. "volume 11.4x median" — interpretable, not a fake 51σ.
+    price_velocity_ratio: float = Field(default=5.0, gt=0.0)  # |latest move| >= N x median move
+    volume_spike_ratio: float = Field(default=8.0, gt=0.0)    # latest volume >= N x median volume
     cooldown_minutes: int = Field(default=60, ge=0)
     pull_resting_orders: bool = True
 

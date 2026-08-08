@@ -61,8 +61,8 @@ def test_transitions_open_then_close() -> None:
 
 # --- kill switch -----------------------------------------------------------
 def ks_cfg(**kw) -> KillSwitchConfig:
-    base = dict(enabled=True, rolling_window_minutes=60, price_velocity_sigma=4.0,
-                volume_spike_sigma=4.0, cooldown_minutes=10)
+    base = dict(enabled=True, rolling_window_minutes=60, price_velocity_ratio=5.0,
+                volume_spike_ratio=8.0, cooldown_minutes=10)
     base.update(kw)
     return KillSwitchConfig(**base)
 
@@ -85,11 +85,11 @@ def test_kill_switch_quiet_market_not_triggered() -> None:
 
 def test_kill_switch_triggers_on_price_spike() -> None:
     ks = KillSwitch(ks_cfg())
-    # quiet, then a violent jump
+    # tiny ~0.1% moves (median move ~0.1%), then a ~10% jump = ~100x median move
     state = _feed(ks, [100, 100.1, 99.9, 100.05, 99.95, 100.0, 110.0])
     assert state.triggered is True
     assert state.paused is True
-    assert "price velocity" in state.reason
+    assert "price velocity" in state.reason and "x median" in state.reason
 
 
 def test_kill_switch_triggers_on_volume_spike() -> None:
@@ -97,10 +97,18 @@ def test_kill_switch_triggers_on_volume_spike() -> None:
     state = _feed(
         ks,
         prices=[100] * 7,  # flat price => no price trigger
-        volumes=[10, 11, 9, 10, 10, 11, 5000],  # volume explosion
+        volumes=[10, 11, 9, 10, 10, 11, 5000],  # ~500x the median volume
     )
     assert state.triggered is True
-    assert "volume spike" in state.reason
+    assert "volume" in state.reason and "x median" in state.reason
+
+
+def test_kill_switch_modest_volume_bump_does_not_trigger() -> None:
+    # a 3x volume bump is below the 8x ratio -> no false alarm (the whole point
+    # of ratios: interpretable, and quiet on normal spikiness)
+    ks = KillSwitch(ks_cfg())
+    state = _feed(ks, prices=[100] * 7, volumes=[10, 11, 9, 10, 10, 11, 30])
+    assert state.triggered is False
 
 
 def test_kill_switch_resumes_after_cooldown() -> None:
@@ -140,9 +148,10 @@ def test_kill_switch_does_not_mix_symbol_price_scales() -> None:
 
 def test_kill_switch_per_symbol_spike_names_the_symbol() -> None:
     ks = KillSwitch(ks_cfg())
-    _feed_sym(ks, "BTC/USDT", [100_000] * 6)           # BTC quiet
-    state = _feed_sym(ks, "ADA/USDT", [0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.75], start_min=6)
-    assert state.triggered is True                      # ADA's own +50% jump trips
+    _feed_sym(ks, "BTC/USDT", [100_000, 100_050, 99_950, 100_010, 99_990, 100_000])  # BTC quiet
+    # ADA: small ~0.2% wobble (non-flat baseline), then a ~50% jump = huge ratio
+    state = _feed_sym(ks, "ADA/USDT", [0.500, 0.501, 0.499, 0.502, 0.498, 0.500, 0.75], start_min=6)
+    assert state.triggered is True                      # ADA's own jump trips
     assert "ADA/USDT" in state.reason
 
 

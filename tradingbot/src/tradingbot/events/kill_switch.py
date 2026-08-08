@@ -46,16 +46,16 @@ class KillSwitchState:
     cooldown_until: datetime | None = None
 
 
-def _zscore(latest: float, history: list[float]) -> float:
-    """|z| of ``latest`` against ``history``. A jump out of a flat series
-    (zero variance) returns +inf so it always trips the threshold."""
+def _ratio(latest: float, history: list[float]) -> float | None:
+    """``latest`` as a multiple of the MEDIAN of ``history``. Median (not
+    mean/std) so heavy-tailed volume doesn't manufacture 50σ readings. Returns
+    None when there is no usable (positive) baseline to divide by."""
     if len(history) < 2:
-        return 0.0
-    mean = statistics.fmean(history)
-    std = statistics.pstdev(history)
-    if std == 0.0:
-        return float("inf") if abs(latest - mean) > 1e-12 else 0.0
-    return abs(latest - mean) / std
+        return None
+    med = statistics.median(history)
+    if med <= 0:
+        return None
+    return latest / med
 
 
 @dataclass
@@ -80,21 +80,23 @@ class KillSwitch:
     def _abnormal_one(self, obs_list: deque[Observation]) -> tuple[bool, str]:
         if len(obs_list) < _MIN_SAMPLES + 1:
             return False, ""
+        # price velocity: the latest single-bar |move| vs the median recent move
         prices = [o.price for o in obs_list]
         returns = [
-            (prices[i] - prices[i - 1]) / prices[i - 1]
+            abs((prices[i] - prices[i - 1]) / prices[i - 1])
             for i in range(1, len(prices))
             if prices[i - 1] != 0
         ]
         if len(returns) >= _MIN_SAMPLES:
-            z = _zscore(returns[-1], returns[:-1])
-            if z >= self.config.price_velocity_sigma:
-                return True, f"price velocity {z:.1f}σ"
+            r = _ratio(returns[-1], returns[:-1])
+            if r is not None and r >= self.config.price_velocity_ratio:
+                return True, f"price velocity {r:.1f}x median"
+        # volume spike: the latest bar's volume vs the median recent volume
         volumes = [o.volume for o in obs_list]
-        if any(volumes):
-            zv = _zscore(volumes[-1], volumes[:-1])
-            if zv >= self.config.volume_spike_sigma:
-                return True, f"volume spike {zv:.1f}σ"
+        if len(volumes) >= _MIN_SAMPLES + 1 and any(volumes[:-1]):
+            rv = _ratio(volumes[-1], volumes[:-1])
+            if rv is not None and rv >= self.config.volume_spike_ratio:
+                return True, f"volume {rv:.1f}x median"
         return False, ""
 
     def _abnormal(self, symbol: str) -> tuple[bool, str]:
