@@ -390,18 +390,39 @@ def deploy_sweep_report(
         "",
         "deploy% | net%    | maxdd% | ~real dd% | return/dd | trades",
     ]
+    ratios: list[tuple[float, float]] = []
     for d, res in rows:
         rr = res.net_pct / res.maxdd_pct if res.maxdd_pct > 0 else 0.0
+        ratios.append((d, rr))
         lines.append(f"{d:6.0f}  | {res.net_pct:+7.2f} | {res.maxdd_pct:5.1f}  | "
                      f"{res.maxdd_pct * 2:7.0f}   | {rr:8.2f}  | {res.trades:5d}")
-    lines += ["", "### Read",
-              "- Deployment scales return AND drawdown together (near-linear) — return/dd is "
-              "roughly FLAT, so this isn't about efficiency; it's about how much drawdown you "
-              "can stomach.",
-              "- `~real dd%` doubles the modelled figure for the bull/survivor bias — plan around "
-              "THAT, not the backtest number.",
-              "- Pick the deploy% whose ~real dd you can sit through, then set each sleeve's "
-              "target_notional_quote = (deploy%/100) x (capital / 7).",
-              "- More launch capital doesn't change these %s — keep the same deploy%, just scale "
-              "the absolute sleeve sizes up."]
+
+    # Is return/dd actually flat across the sweep, or does it degrade as you deploy
+    # less? On uncorrelated/idealised series it's ~flat (deployment is a pure
+    # dial). On correlated real assets the drawdown has a stubborn floor, so return
+    # falls FASTER than drawdown and full deployment is the most efficient — report
+    # whichever the data shows rather than asserting one.
+    rr_top = ratios[0][1] if ratios else 0.0        # highest deploy%
+    rr_bot = ratios[-1][1] if ratios else 0.0       # lowest deploy%
+    flat = rr_top <= 0 or rr_bot >= rr_top * 0.85   # within 15% => call it flat
+    lines += ["", "### Read"]
+    if flat:
+        lines.append("- return/dd is roughly FLAT across this sweep — deployment is a near-pure "
+                     "dial on both return and drawdown, so this isn't about efficiency; it's about "
+                     "how much drawdown you can stomach.")
+    else:
+        best_d = ratios[0][0]
+        lines.append(f"- return/dd is NOT flat here: it's best at full deployment "
+                     f"({rr_top:.1f} at {best_d:.0f}%) and DEGRADES as you deploy less "
+                     f"({rr_bot:.1f} at the bottom). Return falls faster than drawdown, so lowering "
+                     f"deployment is not free efficiency — you PAY return to cap absolute drawdown.")
+        lines.append("- The drawdown has a stubborn floor (correlated coins ride bears down to the "
+                     "channel exit) — you can't make this low-drawdown by shrinking size alone.")
+    lines += [
+        "- `~real dd%` doubles the modelled figure for the bull/survivor bias — plan around "
+        "THAT, not the backtest number.",
+        "- Pick the deploy% whose ~real dd you can sit through, then set each sleeve's "
+        "target_notional_quote = (deploy%/100) x (capital / 7).",
+        "- More launch capital doesn't change these %s — keep the same deploy%, just scale "
+        "the absolute sleeve sizes up."]
     return "\n".join(lines)

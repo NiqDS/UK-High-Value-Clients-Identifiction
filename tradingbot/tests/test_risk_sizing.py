@@ -139,3 +139,6 @@ def test_deploy_sweep_report_lists_levels_and_reads() -> None:
     assert "~real dd%" in report
     for r in ("   100  |", "    50  |", "    25  |"):
         assert r in report
+    # the Read section describes efficiency truthfully — either FLAT or NOT flat,
+    # never both; and it is data-driven, not a fixed assertion
+    assert ("roughly FLAT" in report) ^ ("NOT flat here" in report)
