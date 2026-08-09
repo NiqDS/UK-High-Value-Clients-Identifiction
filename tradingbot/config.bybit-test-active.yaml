@@ -130,6 +130,9 @@ app:
   trading_enabled: true
   log_level: INFO
   log_json: false
+  log_file: "data/test_active.log"   # durable rotating log for the unattended run
+  log_file_max_bytes: 5000000        # ~5 MB/file
+  log_file_backups: 5                # keep 5 rotations (~25 MB total)
   db_url: "sqlite:///data/tradingbot_test_active.db"   # SEPARATE from production
   heartbeat_interval_seconds: 600  # poll every 10 minutes
   max_api_latency_ms: 3000

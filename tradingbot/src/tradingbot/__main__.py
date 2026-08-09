@@ -1101,7 +1101,10 @@ def main() -> int:
     args = parser.parse_args()
 
     settings = load_settings(args.config, args.env_file)
-    setup_logging(settings.config.app.log_level, settings.config.app.log_json)
+    _app = settings.config.app
+    setup_logging(_app.log_level, _app.log_json, log_file=_app.log_file,
+                  log_file_max_bytes=_app.log_file_max_bytes,
+                  log_file_backups=_app.log_file_backups)
 
     if args.command == "check-config":
         _print_config_summary(settings)

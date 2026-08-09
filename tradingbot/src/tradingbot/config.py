@@ -296,6 +296,11 @@ class AppConfig(BaseModel):
     trading_enabled: bool = True
     log_level: str = "INFO"
     log_json: bool = False
+    # Persist logs to a rotating file (in addition to stdout) so an unattended
+    # run leaves a durable, reviewable trail. None/"" = stdout only.
+    log_file: str | None = None
+    log_file_max_bytes: int = Field(default=5_000_000, gt=0)  # ~5 MB per file
+    log_file_backups: int = Field(default=5, ge=0)            # keep 5 rotations
     db_url: str = "sqlite:///data/tradingbot.db"
     heartbeat_interval_seconds: int = Field(default=15, gt=0)
     max_api_latency_ms: int = Field(default=2000, gt=0)

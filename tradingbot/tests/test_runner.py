@@ -79,6 +79,34 @@ async def test_run_once_executes_and_persists(tmp_path) -> None:
     assert rows[0].valuation_pct == pytest.approx(-1.0)
 
 
+async def test_run_once_persists_decision_log(tmp_path) -> None:
+    # the DB-fill guarantee: a paper run records EVERY decision (not just fills)
+    # to the decision log, so an unattended run accumulates the RL/analysis data.
+    from tradingbot.store import DecisionLog
+
+    cfg = Config(exchange={"symbols_allowlist": ["BTC/USD"], "quote_currency": "USD"},
+                 telegram={"approval_threshold_quote": 1000.0})
+    settings = Settings(config=cfg, secrets=Secrets(_env_file=None))
+    sf = make_session_factory(f"sqlite:///{tmp_path / 'tb.db'}")
+    store = SqliteRiskStateStore(sf)
+    trade_log = TradeLog(sf)
+    decision_log = DecisionLog(sf)
+    engine = RiskEngine(cfg, store)
+    executor = Executor(cfg, PaperBroker(cfg.fees))
+    pipeline = TradingPipeline(cfg, engine, executor, store, approver=auto_approve)
+    runner = TradingRunner(
+        settings=settings, adapter=ExchangeAdapter(_FakeClient()), pipeline=pipeline,
+        strategy=BuyOnceStrategy(), store=store, trade_log=trade_log,
+        portfolio=PositionTracker(), decision_log=decision_log,
+    )
+    await runner.run_once("BTC/USD", now=NOW)
+    rows = decision_log.all()
+    assert len(rows) >= 1
+    d = rows[0]
+    assert d.symbol == "BTC/USD" and d.is_entry is True
+    assert d.outcome  # a non-empty outcome label was captured
+
+
 async def test_run_once_no_double_entry_when_holding(tmp_path) -> None:
     runner, trade_log, portfolio = build(tmp_path, BuyOnceStrategy())
     await runner.run_once("BTC/USD", now=NOW)

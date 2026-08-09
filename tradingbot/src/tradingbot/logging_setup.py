@@ -74,19 +74,42 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(payload, default=str)
 
 
-def setup_logging(level: str = "INFO", json_output: bool = False) -> None:
-    handler = logging.StreamHandler(sys.stdout)
-    handler.addFilter(RedactionFilter())
+def _make_formatter(json_output: bool) -> logging.Formatter:
     if json_output:
-        handler.setFormatter(JsonFormatter())
-    else:
-        handler.setFormatter(
-            PlainRedactingFormatter("%(asctime)s %(levelname)-7s %(name)s | %(message)s")
-        )
+        return JsonFormatter()
+    return PlainRedactingFormatter("%(asctime)s %(levelname)-7s %(name)s | %(message)s")
 
+
+def setup_logging(
+    level: str = "INFO",
+    json_output: bool = False,
+    log_file: str | None = None,
+    log_file_max_bytes: int = 5_000_000,
+    log_file_backups: int = 5,
+) -> None:
     root = logging.getLogger()
     root.handlers.clear()
+
+    handler = logging.StreamHandler(sys.stdout)
+    handler.addFilter(RedactionFilter())
+    handler.setFormatter(_make_formatter(json_output))
     root.addHandler(handler)
+
+    # Optional durable, size-rotated file log (same redaction + format). For long
+    # unattended runs so the trail survives a closed terminal / scrollback.
+    if log_file:
+        from logging.handlers import RotatingFileHandler
+        from pathlib import Path
+
+        Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+        fh = RotatingFileHandler(
+            log_file, maxBytes=log_file_max_bytes, backupCount=log_file_backups,
+            encoding="utf-8",
+        )
+        fh.addFilter(RedactionFilter())
+        fh.setFormatter(_make_formatter(json_output))
+        root.addHandler(fh)
+
     root.setLevel(level.upper())
 
     # Quiet chatty dependencies: httpx/httpcore log every HTTP request at INFO
