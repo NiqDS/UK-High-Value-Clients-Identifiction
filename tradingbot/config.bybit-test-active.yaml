@@ -91,9 +91,14 @@ events:
 # kill switch on 15m data reacts to intraday moves — fine for a paper test
 kill_switch:
   enabled: true
-  rolling_window_minutes: 30
-  price_velocity_ratio: 5.0        # latest move >= 5x the median recent move
-  volume_spike_ratio: 8.0          # latest volume >= 8x the median recent volume
+  rolling_window_minutes: 30       # count-based: keeps 30 recent bars (~7.5h at 15m)
+  # 15m-TUNED. Intraday crypto is far burstier than daily bars — routine 15m
+  # candles hit 12-19x median volume and 6x median move, and breakout entries
+  # COINCIDE with those spikes. Daily-config thresholds (5x / 8x) would pause
+  # exactly when the strategy wants to enter, starving the data-collection DB.
+  # These sit above routine intraday noise so only genuine shocks pause entries.
+  price_velocity_ratio: 10.0       # latest move >= 10x the median recent move
+  volume_spike_ratio: 25.0         # latest volume >= 25x the median recent volume
   cooldown_minutes: 60
   pull_resting_orders: true
 
