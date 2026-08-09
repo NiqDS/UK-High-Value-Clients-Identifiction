@@ -967,6 +967,23 @@ def _risk_report(settings: Settings, args) -> int:
     return 0
 
 
+def _db_stats(settings: Settings, args) -> int:
+    from .analysis.db_stats import render_db_stats
+    from .store import DecisionLog, TradeLog, make_session_factory
+
+    cfg = settings.config
+    sf = make_session_factory(cfg.app.db_url)
+    report = render_db_stats(
+        TradeLog(sf).all(), DecisionLog(sf).all(), quote=cfg.exchange.quote_currency)
+    print(report)
+    if args.report:
+        from pathlib import Path
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote db-stats report to %s", args.report)
+    return 0
+
+
 def _backtest(settings: Settings, args) -> int:
     from .backtest.engine import Backtester, BacktestConfig
     from .backtest.synthetic import synthetic_candles
@@ -1033,7 +1050,7 @@ def main() -> int:
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
                  "regime", "fetch-funding", "fetch-onchain", "cross-asset", "robustness",
                  "trend-sweep", "portfolio", "risk-report", "learn", "risk-sweep",
-                 "deploy-sweep"],
+                 "deploy-sweep", "db-stats"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -1152,6 +1169,8 @@ def main() -> int:
         return _risk_sweep(settings, args)
     if args.command == "deploy-sweep":
         return _deploy_sweep(settings, args)
+    if args.command == "db-stats":
+        return _db_stats(settings, args)
     return 2  # pragma: no cover
 
 
