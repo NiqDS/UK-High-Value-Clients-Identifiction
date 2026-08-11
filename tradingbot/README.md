@@ -359,21 +359,23 @@ docker compose logs -f
 `data/` and `reports/` are mounted as volumes so the trade history survives
 restarts and rebuilds. `restart: unless-stopped` brings it back after a reboot.
 
-### Option B — systemd (no Docker)
+### Option B — systemd on a cloud server (no Docker)
+
+Full runbook (Yandex Cloud / VK Cloud / any Ubuntu 24.04 VM) in
+[`deploy/README.md`](deploy/README.md). In short, on the server:
 
 ```bash
-sudo mkdir -p /opt/tradingbot && sudo chown $USER /opt/tradingbot
-# copy the project there, then:
-cd /opt/tradingbot
-python3 -m venv .venv && .venv/bin/pip install .
-cp .env.example .env          # fill in secrets
-sudo cp deploy/tradingbot.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now tradingbot
-journalctl -u tradingbot -f
+git clone https://github.com/NiqDS/UK-High-Value-Clients-Identifiction.git
+cd UK-High-Value-Clients-Identifiction/tradingbot
+bash deploy/setup-server.sh                    # python, venv, install
+cp .env.example .env && nano .env              # fill Bybit key (local only)
+bash deploy/install-service.sh                 # generates + enables the service
+journalctl -u tradingbot -f                    # follow logs
 ```
 
-Both run `python -m tradingbot run` and stop gracefully on SIGTERM (cancel/flush
-per config, persist state).
+`install-service.sh` writes the systemd unit for the current user/paths, runs
+`python -m tradingbot --config <config> run`, restarts on crash and on reboot,
+and stops gracefully on SIGTERM (cancel/flush per config, persist state).
 
 ## Safety nets
 
