@@ -354,6 +354,29 @@ async def test_paper_equity_overrides_synthetic_fallback(tmp_path) -> None:
     assert equity == pytest.approx(500.0) and free == pytest.approx(500.0)
 
 
+async def test_paper_equity_used_even_with_credentials_present(tmp_path) -> None:
+    # REGRESSION: in dry-run, size off paper_equity even when creds are present.
+    # The real wallet may be 0 (nothing deposited), and reading that 0 would
+    # breach the floor and halt the paper run. Keys are only for public data.
+    from tradingbot.config import Secrets
+
+    runner, _, _ = build(tmp_path, BuyOnceStrategy())
+    runner.cfg.app.dry_run = True
+    runner.cfg.app.paper_equity = 180.0
+    # credentials present, and a wallet that would report ZERO if consulted
+    runner.settings = runner.settings.__class__(
+        config=runner.cfg,
+        secrets=Secrets(_env_file=None, exchange_api_key="k", exchange_api_secret="s"),
+    )
+
+    async def _zero_balance():
+        raise AssertionError("fetch_balance must NOT be called in paper mode")
+
+    runner.adapter.fetch_balance = _zero_balance  # type: ignore[method-assign]
+    equity, free = await runner._equity_free()
+    assert equity == pytest.approx(180.0) and free == pytest.approx(180.0)
+
+
 async def test_paper_equity_unset_uses_floor_fallback(tmp_path) -> None:
     runner, _, _ = build(tmp_path, BuyOnceStrategy())
     runner.cfg.app.paper_equity = 0.0  # unset -> floor*3 fallback

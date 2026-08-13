@@ -136,7 +136,16 @@ class TradingRunner:
             return self._equity_cache
         quote = self.cfg.exchange.quote_currency
         result: tuple[float, float] | None = None
-        if self.settings.secrets.has_exchange_credentials:
+        # PAPER (dry-run): size off the configured paper_equity, NOT the real
+        # wallet — even when credentials are present. The keys are here only to
+        # read PUBLIC market data; the real balance may be 0 (nothing deposited
+        # yet), and reading that 0 would breach the floor and HALT trading,
+        # starving the paper run. No real orders are placed in dry-run, so the
+        # simulated equity is the correct sizing basis.
+        if self.cfg.app.dry_run and self.cfg.app.paper_equity > 0:
+            sim = self.cfg.app.paper_equity
+            result = (sim, sim)
+        elif self.settings.secrets.has_exchange_credentials:
             try:
                 bal = await self.adapter.fetch_balance()
                 result = (bal.total(quote), bal.free(quote))
