@@ -923,6 +923,55 @@ def _deploy_sweep(settings: Settings, args) -> int:
     return 0
 
 
+def _screen_candidate(settings: Settings, args) -> int:
+    from pathlib import Path
+
+    from .analysis.candidate import render_candidate_report, screen_candidate
+    from .backtest.data import load_csv
+    from .backtest.engine import BacktestConfig
+
+    if not args.candidate or "=" not in args.candidate:
+        logger.error("pass --candidate LABEL=path.csv (e.g. --candidate SUI=data/sui_1d.csv)")
+        return 2
+    if not args.asset:
+        logger.error("pass the incumbent basket via --asset LABEL=path.csv (repeatable) — "
+                     "the 7 coins to screen the candidate against")
+        return 2
+
+    def _load(spec: str):
+        label, _, rest = spec.partition("=")
+        path = rest.split("@", 1)[0] if rest else ""
+        if not label or not path or not Path(path).exists():
+            logger.error("bad/missing asset %r", spec)
+            return None
+        candles = load_csv(path)
+        if len(candles) < 50:
+            logger.error("%s has only %d bars", path, len(candles))
+            return None
+        return (label, candles)
+
+    baseline = []
+    for spec in args.asset:
+        item = _load(spec)
+        if item is None:
+            return 2
+        baseline.append(item)
+    cand = _load(args.candidate)
+    if cand is None:
+        return 2
+
+    bt = BacktestConfig(initial_equity=args.equity, fee_pct=args.fee, slippage_pct=args.slippage)
+    verdict = screen_candidate(baseline, cand[0], cand[1], settings.config.strategy, bt,
+                               n_segments=args.segments, weight_mode=args.weight_mode)
+    report = render_candidate_report(verdict)
+    print(report)
+    if args.report:
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote candidate-screen report to %s", args.report)
+    return 0 if verdict.promote else 1
+
+
 def _learn(settings: Settings, args) -> int:
     from .learning.loop import assess, paired_samples_from_db, render_learning_report
     from .learning.samples import scan_folder
@@ -1050,7 +1099,7 @@ def main() -> int:
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
                  "regime", "fetch-funding", "fetch-onchain", "cross-asset", "robustness",
                  "trend-sweep", "portfolio", "risk-report", "learn", "risk-sweep",
-                 "deploy-sweep", "db-stats"],
+                 "deploy-sweep", "db-stats", "screen-candidate"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -1109,6 +1158,9 @@ def main() -> int:
     parser.add_argument("--deploy-levels", default=None,
                         help="deploy-sweep: comma-separated deployment%% levels to test "
                              "(default 100,75,50,33,25,15)")
+    parser.add_argument("--candidate", default=None,
+                        help="screen-candidate: the coin to assess as LABEL=path.csv "
+                             "(screened against the --asset incumbents)")
     parser.add_argument("--momentum", type=int, default=0,
                         help="portfolio: cross-sectional momentum lookback in bars "
                              "(0 = off; e.g. 60 = rank coins by trailing 60-day return)")
@@ -1171,6 +1223,8 @@ def main() -> int:
         return _deploy_sweep(settings, args)
     if args.command == "db-stats":
         return _db_stats(settings, args)
+    if args.command == "screen-candidate":
+        return _screen_candidate(settings, args)
     return 2  # pragma: no cover
 
 
