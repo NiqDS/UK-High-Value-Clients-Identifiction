@@ -276,8 +276,17 @@ def _fetch_data(settings: Settings, args) -> int:
     if args.exchange:
         ex_cfg = ex_cfg.model_copy(update={"name": args.exchange})
 
+    # Public OHLCV needs NO credentials. Build the adapter WITHOUT them so that
+    #   (a) fetching from a DIFFERENT venue than the configured one doesn't send
+    #       this exchange's key to that venue (Binance rejects a Bybit key with
+    #       "Invalid Api-Key ID." during its authenticated load_markets), and
+    #   (b) the key is never leaked to a third-party exchange we're only reading
+    #       public candles from.
+    from .config import Secrets
+    public_secrets = Secrets(_env_file=None)
+
     async def _go() -> int:
-        adapter = build_adapter(ex_cfg, settings.secrets)
+        adapter = build_adapter(ex_cfg, public_secrets)
         try:
             await adapter.load_markets()
             client = adapter._client  # for parse_timeframe / pagination
