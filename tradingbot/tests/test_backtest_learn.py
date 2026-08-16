@@ -27,6 +27,47 @@ def _assets(n=700):
             ("ETH", synthetic_candles(n=n, seed=2, drift=0.0007))]
 
 
+def test_backtest_learn_date_window_subsets_trades(tmp_path) -> None:
+    # the CLI date filter (--start/--end) restricts the backtest to a window,
+    # e.g. isolate the 2022 bear — the windowed run must be a subset of the full.
+    from argparse import Namespace
+    import dataclasses
+
+    from tradingbot import __main__ as m
+    from tradingbot.backtest.data import save_csv
+    from tradingbot.config import Config, Secrets, Settings
+
+    # daily candles spanning 2021-01-01 .. ~2023-09 so a 2022 window is a strict subset
+    base = synthetic_candles(n=1000, seed=1, drift=0.0008)
+    day = 86_400_000
+    start_2021 = 1_609_459_200_000  # 2021-01-01 UTC
+    daily = [dataclasses.replace(c, timestamp=start_2021 + i * day)
+             for i, c in enumerate(base)]
+    csv = tmp_path / "coin_1d.csv"
+    save_csv(str(csv), daily)
+
+    cfg = Config(strategy={"donchian_entry_period": 20, "donchian_exit_period": 10})
+    settings = Settings(config=cfg, secrets=Secrets(_env_file=None))
+
+    def _args(start, end, out):
+        return Namespace(asset=[f"BTC={csv}"], equity=10_000.0, fee=0.6, slippage=0.05,
+                         report=str(out), export=None, start=start, end=end)
+
+    full_out, win_out = tmp_path / "full.md", tmp_path / "win.md"
+    assert m._backtest_learn(settings, _args(None, None, full_out)) == 0
+    assert m._backtest_learn(settings, _args("2022-01-01", "2022-12-31", win_out)) == 0
+    # the windowed report labels the span, and covers <= the full trade count
+    win_txt = win_out.read_text()
+    assert "[2022-01-01 .. 2022-12-31]" in win_txt
+
+    def _trades(txt):
+        for line in txt.splitlines():
+            if line.startswith("trades:"):
+                return int(line.split(":")[1])
+        return -1
+    assert 0 <= _trades(win_txt) <= _trades(full_out.read_text())
+
+
 def test_run_backtest_trades_tags_symbols() -> None:
     tagged = run_backtest_trades(_assets(), _cfg(), _bt())
     assert tagged, "expected some closed trades"

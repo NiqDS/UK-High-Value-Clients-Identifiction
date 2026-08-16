@@ -984,18 +984,37 @@ def _screen_candidate(settings: Settings, args) -> int:
 def _backtest_learn(settings: Settings, args) -> int:
     from pathlib import Path
 
+    import datetime as _dt
+
     from .analysis.backtest_learn import (
         export_trades_jsonl,
         render_backtest_learn_report,
         run_backtest_trades,
     )
     from .backtest.data import load_csv
+    from .backtest.portfolio import slice_by_date
     from .backtest.engine import BacktestConfig
 
     if not args.asset:
         logger.error("pass the daily-history CSVs via --asset LABEL=path.csv (repeatable), "
                      "e.g. --asset BTC=data/btc_1d_long.csv ... (the 7 coins)")
         return 2
+
+    def _to_ms(s):
+        if not s:
+            return None
+        try:
+            d = _dt.datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=_dt.timezone.utc)
+        except ValueError:
+            logger.error("bad date %r — use YYYY-MM-DD", s)
+            raise
+        return int(d.timestamp() * 1000)
+
+    try:
+        start_ms, end_ms = _to_ms(args.start), _to_ms(args.end)
+    except ValueError:
+        return 2
+
     assets = []
     for spec in args.asset:
         label, _, rest = spec.partition("=")
@@ -1007,12 +1026,21 @@ def _backtest_learn(settings: Settings, args) -> int:
         if len(candles) < 50:
             logger.error("%s has only %d bars", path, len(candles))
             return 2
+        if start_ms or end_ms:
+            candles = slice_by_date(candles, start_ms, end_ms)
+            if len(candles) < 60:
+                logger.error("%s has only %d bars inside the date window — widen --start/--end "
+                             "(Donchian needs > entry_period+1 bars)", label, len(candles))
+                return 2
         assets.append((label, candles))
 
+    window = ""
+    if start_ms or end_ms:
+        window = f" [{args.start or 'start'} .. {args.end or 'end'}]"
     bt = BacktestConfig(initial_equity=args.equity, fee_pct=args.fee, slippage_pct=args.slippage)
     tagged = run_backtest_trades(assets, settings.config.strategy, bt)
     report = render_backtest_learn_report(
-        tagged, settings.config.strategy, bt, label=f"{len(assets)} coins")
+        tagged, settings.config.strategy, bt, label=f"{len(assets)} coins{window}")
     print(report)
     if args.report:
         Path(args.report).parent.mkdir(parents=True, exist_ok=True)
