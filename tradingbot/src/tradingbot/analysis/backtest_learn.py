@@ -98,10 +98,15 @@ def render_backtest_learn_report(
         f"avg loss:      {overall.avg_loss:+.2f}%",
         f"payoff ratio:  {_payoff(overall.payoff)}  (avg win / |avg loss|)",
         f"expectancy:    {overall.expectancy:+.3f}% per trade",
-        f"sum of returns:{overall.total:+.1f}%",
+        f"sum of per-trade returns: {overall.total:+.1f}%  (NOT account return — see note)",
         "",
-        "## Per-symbol (worst expectancy first — over the FULL history)",
-        "symbol     | trades | win% | payoff | expectancy% | sum%",
+        "> Trust expectancy / payoff / win-rate — they judge the edge. The sum%s are "
+        "per-coin STANDALONE (each coin as if it held the whole account), so they do NOT "
+        "equal the 7-sleeve basket's account return (run `portfolio` for that). And this "
+        "history is bull/survivor-biased, so real forward expectancy is materially lower.",
+        "",
+        "## Per-symbol (rank by expectancy — over the FULL history)",
+        "symbol     | trades | win% | payoff | expectancy% | sum%(standalone)",
     ]
     rows = sorted(per_sym.items(), key=lambda kv: _stats(kv[1]).expectancy)
     for sym, rets in rows:
