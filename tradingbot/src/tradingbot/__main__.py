@@ -981,6 +981,61 @@ def _screen_candidate(settings: Settings, args) -> int:
     return 0 if verdict.promote else 1
 
 
+def _price_timeline(settings: Settings, args) -> int:
+    import datetime as _dt
+    from pathlib import Path
+
+    from .analysis.price_timeline import render_timeline_report
+    from .backtest.data import load_csv
+    from .backtest.portfolio import slice_by_date
+
+    if not args.asset:
+        logger.error("pass --asset LABEL=path.csv for each coin (repeatable)")
+        return 2
+
+    def _to_ms(s):
+        if not s:
+            return None
+        try:
+            d = _dt.datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=_dt.timezone.utc)
+        except ValueError:
+            logger.error("bad date %r — use YYYY-MM-DD", s)
+            raise
+        return int(d.timestamp() * 1000)
+
+    try:
+        start_ms, end_ms = _to_ms(args.start), _to_ms(args.end)
+    except ValueError:
+        return 2
+
+    assets = []
+    for spec in args.asset:
+        label, _, rest = spec.partition("=")
+        path = rest.split("@", 1)[0] if rest else ""
+        if not label or not path or not Path(path).exists():
+            logger.error("bad/missing --asset %r", spec)
+            return 2
+        candles = load_csv(path)
+        if start_ms or end_ms:
+            candles = slice_by_date(candles, start_ms, end_ms)
+        if len(candles) < 5:
+            logger.error("%s has too few bars in the window", label)
+            return 2
+        assets.append((label, candles))
+
+    window = ""
+    if start_ms or end_ms:
+        window = f"[{args.start or 'start'} .. {args.end or 'end'}]"
+    swing = args.swing_pct if args.swing_pct else 15.0
+    report = render_timeline_report(assets, swing_pct=swing, label=window)
+    print(report)
+    if args.report:
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote price-timeline report to %s", args.report)
+    return 0
+
+
 def _backtest_learn(settings: Settings, args) -> int:
     from pathlib import Path
 
@@ -1180,7 +1235,8 @@ def main() -> int:
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
                  "regime", "fetch-funding", "fetch-onchain", "cross-asset", "robustness",
                  "trend-sweep", "portfolio", "risk-report", "learn", "risk-sweep",
-                 "deploy-sweep", "db-stats", "screen-candidate", "backtest-learn"],
+                 "deploy-sweep", "db-stats", "screen-candidate", "backtest-learn",
+                 "price-timeline"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -1245,6 +1301,9 @@ def main() -> int:
     parser.add_argument("--export", default=None,
                         help="backtest-learn: also dump the backtest trades to this JSONL path "
                              "for the learn loop to ingest (source=backtest)")
+    parser.add_argument("--swing-pct", type=float, default=15.0,
+                        help="price-timeline: min %% reversal to flag a correction/rally "
+                             "(default 15)")
     parser.add_argument("--momentum", type=int, default=0,
                         help="portfolio: cross-sectional momentum lookback in bars "
                              "(0 = off; e.g. 60 = rank coins by trailing 60-day return)")
@@ -1311,6 +1370,8 @@ def main() -> int:
         return _screen_candidate(settings, args)
     if args.command == "backtest-learn":
         return _backtest_learn(settings, args)
+    if args.command == "price-timeline":
+        return _price_timeline(settings, args)
     return 2  # pragma: no cover
 
 
