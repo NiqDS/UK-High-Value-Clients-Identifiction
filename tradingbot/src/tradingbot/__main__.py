@@ -981,6 +981,50 @@ def _screen_candidate(settings: Settings, args) -> int:
     return 0 if verdict.promote else 1
 
 
+def _backtest_learn(settings: Settings, args) -> int:
+    from pathlib import Path
+
+    from .analysis.backtest_learn import (
+        export_trades_jsonl,
+        render_backtest_learn_report,
+        run_backtest_trades,
+    )
+    from .backtest.data import load_csv
+    from .backtest.engine import BacktestConfig
+
+    if not args.asset:
+        logger.error("pass the daily-history CSVs via --asset LABEL=path.csv (repeatable), "
+                     "e.g. --asset BTC=data/btc_1d_long.csv ... (the 7 coins)")
+        return 2
+    assets = []
+    for spec in args.asset:
+        label, _, rest = spec.partition("=")
+        path = rest.split("@", 1)[0] if rest else ""
+        if not label or not path or not Path(path).exists():
+            logger.error("bad/missing --asset %r", spec)
+            return 2
+        candles = load_csv(path)
+        if len(candles) < 50:
+            logger.error("%s has only %d bars", path, len(candles))
+            return 2
+        assets.append((label, candles))
+
+    bt = BacktestConfig(initial_equity=args.equity, fee_pct=args.fee, slippage_pct=args.slippage)
+    tagged = run_backtest_trades(assets, settings.config.strategy, bt)
+    report = render_backtest_learn_report(
+        tagged, settings.config.strategy, bt, label=f"{len(assets)} coins")
+    print(report)
+    if args.report:
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote backtest-learn report to %s", args.report)
+    if args.export:
+        n = export_trades_jsonl(tagged, args.export)
+        logger.info("exported %d backtest trades to %s (learn will ingest as source=backtest)",
+                    n, args.export)
+    return 0
+
+
 def _learn(settings: Settings, args) -> int:
     from .learning.loop import assess, paired_samples_from_db, render_learning_report
     from .learning.samples import scan_folder
@@ -1108,7 +1152,7 @@ def main() -> int:
                  "weekly-report", "fetch-data", "walkforward", "compare", "chart-events",
                  "regime", "fetch-funding", "fetch-onchain", "cross-asset", "robustness",
                  "trend-sweep", "portfolio", "risk-report", "learn", "risk-sweep",
-                 "deploy-sweep", "db-stats", "screen-candidate"],
+                 "deploy-sweep", "db-stats", "screen-candidate", "backtest-learn"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -1170,6 +1214,9 @@ def main() -> int:
     parser.add_argument("--candidate", default=None,
                         help="screen-candidate: the coin to assess as LABEL=path.csv "
                              "(screened against the --asset incumbents)")
+    parser.add_argument("--export", default=None,
+                        help="backtest-learn: also dump the backtest trades to this JSONL path "
+                             "for the learn loop to ingest (source=backtest)")
     parser.add_argument("--momentum", type=int, default=0,
                         help="portfolio: cross-sectional momentum lookback in bars "
                              "(0 = off; e.g. 60 = rank coins by trailing 60-day return)")
@@ -1234,6 +1281,8 @@ def main() -> int:
         return _db_stats(settings, args)
     if args.command == "screen-candidate":
         return _screen_candidate(settings, args)
+    if args.command == "backtest-learn":
+        return _backtest_learn(settings, args)
     return 2  # pragma: no cover
 
 
