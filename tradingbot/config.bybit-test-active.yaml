@@ -121,7 +121,7 @@ telegram:
   approval_threshold_quote: 0.0
   approval_timeout_seconds: 300
   allowed_chat_ids: []             # EMPTY on this RU-cloud host — Telegram API is blocked here,
-                                   # so entries auto-approve. On the UK/EU host use: [8993718883]
+                                   # so entries auto-approve. On the UK/EU host use: [460430602]
 
 reporting:
   weekly_enabled: true

@@ -115,7 +115,7 @@ telegram:
   enabled: true
   approval_threshold_quote: 0.0
   approval_timeout_seconds: 300
-  allowed_chat_ids: []              # add [8993718883] on the UK/EU host (Telegram API is blocked
+  allowed_chat_ids: []              # add [460430602] on the UK/EU host (Telegram API is blocked
                                     # from the current RU-cloud box, so keep empty until migration)
 
 reporting:
