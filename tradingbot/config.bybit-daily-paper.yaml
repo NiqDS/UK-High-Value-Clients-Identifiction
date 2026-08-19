@@ -115,7 +115,7 @@ telegram:
   enabled: true
   approval_threshold_quote: 0.0
   approval_timeout_seconds: 300
-  allowed_chat_ids: []              # paper auto-approves without this; live would refuse to start
+  allowed_chat_ids: [8993718883]    # your chat id — daily entries prompt for Approve/Reject
 
 reporting:
   weekly_enabled: true

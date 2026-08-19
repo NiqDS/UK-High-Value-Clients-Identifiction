@@ -120,8 +120,8 @@ telegram:
   enabled: true
   approval_threshold_quote: 0.0
   approval_timeout_seconds: 300
-  allowed_chat_ids: []             # add your chat id [460430602] for prompts, or leave
-                                   # empty to auto-approve (better for unattended data runs)
+  allowed_chat_ids: [8993718883]   # your chat id — entries now prompt for Approve/Reject.
+                                   # (set back to [] to auto-approve for unattended data runs)
 
 reporting:
   weekly_enabled: true
