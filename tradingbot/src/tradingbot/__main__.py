@@ -1108,6 +1108,89 @@ def _backtest_learn(settings: Settings, args) -> int:
     return 0
 
 
+def _event_proximity(settings: Settings, args) -> int:
+    from pathlib import Path
+
+    from .analysis.backtest_learn import run_backtest_trades
+    from .analysis.event_proximity import render_event_proximity_report
+    from .backtest.data import load_csv
+    from .backtest.engine import BacktestConfig
+    from .events.calendar import load_calendar_csv
+
+    if not args.asset:
+        logger.error("pass the daily-history CSVs via --asset LABEL=path.csv (the 7 coins)")
+        return 2
+    events_path = args.events_csv or "calendars/macro_events.csv"
+    events = load_calendar_csv(events_path)
+    if not events:
+        logger.error("no events loaded from %s — pass --events-csv PATH (name,timestamp_utc)",
+                     events_path)
+        return 2
+    assets = []
+    for spec in args.asset:
+        label, _, rest = spec.partition("=")
+        path = rest.split("@", 1)[0] if rest else ""
+        if not label or not path or not Path(path).exists():
+            logger.error("bad/missing --asset %r", spec)
+            return 2
+        candles = load_csv(path)
+        if len(candles) < 50:
+            logger.error("%s has only %d bars", path, len(candles))
+            return 2
+        assets.append((label, candles))
+
+    window = args.window_days if args.window_days else 3
+    bt = BacktestConfig(initial_equity=args.equity, fee_pct=args.fee, slippage_pct=args.slippage)
+    tagged = run_backtest_trades(assets, settings.config.strategy, bt)
+    report = render_event_proximity_report(
+        tagged, events, window, settings.config.strategy, bt,
+        label=f"{len(assets)} coins, ±{window}d")
+    print(report)
+    if args.report:
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote event-proximity report to %s", args.report)
+    return 0
+
+
+def _telegram_test(settings: Settings, args) -> int:
+    """Send a single test message to the allowlisted chat(s) — verifies the token
+    and chat id round-trip without waiting for a trade."""
+    import asyncio
+
+    cfg = settings.config
+    token = settings.secrets.telegram_bot_token.get_secret_value()
+    if not token:
+        logger.error("TELEGRAM_BOT_TOKEN missing in .env — add the BotFather token there.")
+        return 2
+    from .logging_setup import register_secret
+    register_secret(token)
+    chat_ids = list(cfg.telegram.allowed_chat_ids)
+    if not chat_ids:
+        logger.error("telegram.allowed_chat_ids is empty in the config — add your numeric chat id "
+                     "(see docs/TELEGRAM_SETUP.md).")
+        return 2
+
+    text = args.message or ("✅ tradingbot Telegram is wired. This is a test message — "
+                            "trade approvals and alerts will arrive here.")
+
+    async def _go() -> int:
+        from telegram import Bot
+        ok = 0
+        async with Bot(token) as bot:
+            for cid in chat_ids:
+                try:
+                    await bot.send_message(chat_id=cid, text=text)
+                    logger.info("sent test message to chat %s", cid)
+                    ok += 1
+                except Exception as exc:  # noqa: BLE001
+                    logger.error("could NOT message chat %s: %s "
+                                 "(is the id right? have you messaged the bot once?)", cid, exc)
+        return 0 if ok == len(chat_ids) else 1
+
+    return asyncio.run(_go())
+
+
 def _learn(settings: Settings, args) -> int:
     from .learning.loop import assess, paired_samples_from_db, render_learning_report
     from .learning.samples import scan_folder
@@ -1236,7 +1319,7 @@ def main() -> int:
                  "regime", "fetch-funding", "fetch-onchain", "cross-asset", "robustness",
                  "trend-sweep", "portfolio", "risk-report", "learn", "risk-sweep",
                  "deploy-sweep", "db-stats", "screen-candidate", "backtest-learn",
-                 "price-timeline"],
+                 "price-timeline", "event-proximity", "telegram-test"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -1304,6 +1387,10 @@ def main() -> int:
     parser.add_argument("--swing-pct", type=float, default=15.0,
                         help="price-timeline: min %% reversal to flag a correction/rally "
                              "(default 15)")
+    parser.add_argument("--window-days", type=int, default=3,
+                        help="event-proximity: ± days around an event to count an entry as NEAR")
+    parser.add_argument("--message", default=None,
+                        help="telegram-test: custom test message text")
     parser.add_argument("--momentum", type=int, default=0,
                         help="portfolio: cross-sectional momentum lookback in bars "
                              "(0 = off; e.g. 60 = rank coins by trailing 60-day return)")
@@ -1372,6 +1459,10 @@ def main() -> int:
         return _backtest_learn(settings, args)
     if args.command == "price-timeline":
         return _price_timeline(settings, args)
+    if args.command == "event-proximity":
+        return _event_proximity(settings, args)
+    if args.command == "telegram-test":
+        return _telegram_test(settings, args)
     return 2  # pragma: no cover
 
 
