@@ -38,6 +38,16 @@ def test_sends_to_each_allowlisted_chat(monkeypatch) -> None:
     assert _FakeBot.sent == [(111, "ping"), (222, "ping")]
 
 
+def test_chat_id_flag_overrides_config(monkeypatch) -> None:
+    _FakeBot.sent = []
+    monkeypatch.setattr("telegram.Bot", _FakeBot)
+    # config allowlist is EMPTY, but --chat-id supplies the target
+    rc = m._telegram_test(_settings("tok", []),
+                          Namespace(message="ping", chat_id=999))
+    assert rc == 0
+    assert _FakeBot.sent == [(999, "ping")]
+
+
 def test_errors_without_token() -> None:
     rc = m._telegram_test(_settings("", [111]), Namespace(message=None))
     assert rc == 2

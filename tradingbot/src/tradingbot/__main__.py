@@ -1165,10 +1165,12 @@ def _telegram_test(settings: Settings, args) -> int:
         return 2
     from .logging_setup import register_secret
     register_secret(token)
-    chat_ids = list(cfg.telegram.allowed_chat_ids)
+    # --chat-id overrides the config allowlist, so you can verify creds from a
+    # host that CAN reach Telegram without editing/committing a config.
+    chat_ids = [args.chat_id] if getattr(args, "chat_id", None) else list(cfg.telegram.allowed_chat_ids)
     if not chat_ids:
-        logger.error("telegram.allowed_chat_ids is empty in the config — add your numeric chat id "
-                     "(see docs/TELEGRAM_SETUP.md).")
+        logger.error("no chat id — pass --chat-id N, or set telegram.allowed_chat_ids in the "
+                     "config (see docs/TELEGRAM_SETUP.md).")
         return 2
 
     text = args.message or ("✅ tradingbot Telegram is wired. This is a test message — "
@@ -1391,6 +1393,8 @@ def main() -> int:
                         help="event-proximity: ± days around an event to count an entry as NEAR")
     parser.add_argument("--message", default=None,
                         help="telegram-test: custom test message text")
+    parser.add_argument("--chat-id", type=int, default=None,
+                        help="telegram-test: send to this chat id, overriding the config allowlist")
     parser.add_argument("--momentum", type=int, default=0,
                         help="portfolio: cross-sectional momentum lookback in bars "
                              "(0 = off; e.g. 60 = rank coins by trailing 60-day return)")
