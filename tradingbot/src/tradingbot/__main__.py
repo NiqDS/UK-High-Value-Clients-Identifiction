@@ -1165,6 +1165,31 @@ def _telegram_test(settings: Settings, args) -> int:
         return 2
     from .logging_setup import register_secret
     register_secret(token)
+
+    # --get-chat-ids: read recent messages via the .env token and print the chat
+    # id(s) of whoever messaged the bot. Removes all manual token/id handling —
+    # message the bot, run this, read your id off the output.
+    if getattr(args, "get_chat_ids", False):
+        async def _dump() -> int:
+            from telegram import Bot
+            async with Bot(token) as bot:
+                updates = await bot.get_updates(timeout=5)
+            seen: dict = {}
+            for u in updates:
+                msg = u.message or u.edited_message
+                if msg and msg.chat:
+                    seen[msg.chat.id] = (getattr(msg.chat, "first_name", "") or "",
+                                         getattr(msg.chat, "username", "") or "")
+            if not seen:
+                logger.warning("no recent messages found — send your bot a message first, "
+                               "then re-run. (If it stays empty, the bot may be running "
+                               "elsewhere and consuming updates.)")
+                return 1
+            for cid, (fn, un) in seen.items():
+                logger.info("CHAT ID = %s   (name=%s username=%s)", cid, fn, un)
+            return 0
+        return asyncio.run(_dump())
+
     # --chat-id overrides the config allowlist, so you can verify creds from a
     # host that CAN reach Telegram without editing/committing a config.
     chat_ids = [args.chat_id] if getattr(args, "chat_id", None) else list(cfg.telegram.allowed_chat_ids)
@@ -1395,6 +1420,9 @@ def main() -> int:
                         help="telegram-test: custom test message text")
     parser.add_argument("--chat-id", type=int, default=None,
                         help="telegram-test: send to this chat id, overriding the config allowlist")
+    parser.add_argument("--get-chat-ids", action="store_true",
+                        help="telegram-test: print the chat id(s) of whoever messaged the bot "
+                             "(reads the .env token; no manual id needed)")
     parser.add_argument("--momentum", type=int, default=0,
                         help="portfolio: cross-sectional momentum lookback in bars "
                              "(0 = off; e.g. 60 = rank coins by trailing 60-day return)")
