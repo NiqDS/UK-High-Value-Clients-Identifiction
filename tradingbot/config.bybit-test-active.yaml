@@ -120,8 +120,8 @@ telegram:
   enabled: true
   approval_threshold_quote: 0.0
   approval_timeout_seconds: 300
-  allowed_chat_ids: [8993718883]   # your chat id — entries now prompt for Approve/Reject.
-                                   # (set back to [] to auto-approve for unattended data runs)
+  allowed_chat_ids: []             # EMPTY on this RU-cloud host — Telegram API is blocked here,
+                                   # so entries auto-approve. On the UK/EU host use: [8993718883]
 
 reporting:
   weekly_enabled: true
