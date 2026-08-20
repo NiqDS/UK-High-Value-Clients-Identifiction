@@ -748,6 +748,7 @@ def _build_runner(settings: Settings):
     approver = None
     report_deliver = None
     emergency_alert = None
+    trade_alert = None
     bot = None
     token = settings.secrets.telegram_bot_token.get_secret_value()
     if token:
@@ -772,9 +773,18 @@ def _build_runner(settings: Settings):
         manager = ApprovalManager(_LazyNotifier(bot_holder), cfg.telegram.approval_timeout_seconds)
         bot = TelegramApprovalBot(token, cfg, manager, controls, status)
         bot_holder["bot"] = bot
-        approver = manager.request
+        # require_approval False => auto-approve entries but keep the bot for
+        # alerts, /status, /pause (the validated systematic posture).
+        if cfg.telegram.require_approval:
+            approver = manager.request
+        else:
+            from .execution.pipeline import auto_approve
+            approver = auto_approve
+            logger.info("Telegram: alerts-only mode (auto-approve; no per-trade tap).")
         report_deliver = bot.send_message
         emergency_alert = bot.send_message
+        if cfg.telegram.trade_alerts:
+            trade_alert = bot.send_message
     else:
         logger.warning("Telegram disabled or unconfigured (need token + allowed_chat_ids); "
                        "running without approval/alerts.")
@@ -783,12 +793,20 @@ def _build_runner(settings: Settings):
         # An unwired approver must never silently deadlock intents in
         # PENDING_APPROVAL (they would be held forever and the bot would look
         # "cleanly idle" while doing nothing).
+        from .execution.pipeline import auto_approve
+        # If approval isn't required by config, auto-approve regardless of
+        # Telegram — that's the validated systematic posture (you lose alerts
+        # without Telegram, but nothing deadlocks).
         approval_possible = (
-            cfg.telegram.approval_threshold_quote
-            <= cfg.risk.max_notional_per_trade_quote
+            cfg.telegram.require_approval
+            and cfg.telegram.approval_threshold_quote <= cfg.risk.max_notional_per_trade_quote
         )
-        if cfg.app.dry_run:
-            from .execution.pipeline import auto_approve
+        if not cfg.telegram.require_approval:
+            approver = auto_approve
+            if not cfg.app.dry_run:
+                logger.warning("LIVE with auto-approve and NO Telegram — trades execute "
+                               "unattended with no alerts. Configure Telegram for alerts.")
+        elif cfg.app.dry_run:
             approver = auto_approve
             logger.warning("PAPER mode without Telegram: auto-approving intents "
                            "(fills are simulated; no real orders).")
@@ -810,7 +828,8 @@ def _build_runner(settings: Settings):
         settings=settings, adapter=adapter, pipeline=pipeline, strategy=strategy,
         store=store, trade_log=trade_log, portfolio=portfolio, kill_switch=kill_switch,
         event_module=event_module, health=health, reporter=reporter,
-        report_deliver=report_deliver, report_path="reports/weekly_latest.md",
+        report_deliver=report_deliver, trade_alert=trade_alert,
+        report_path="reports/weekly_latest.md",
         email_sender=email_sender, regime_overlay=regime_overlay,
         position_store=position_store, decision_log=decision_log,
     )

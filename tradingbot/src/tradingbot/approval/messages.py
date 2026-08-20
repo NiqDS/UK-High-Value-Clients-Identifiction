@@ -95,3 +95,49 @@ def render_settings(settings: dict, quote: str = "USD") -> str:
         "`/set_buy_floor <pct>`  `/set_force_exit <pct>`\n"
         "`/pause`  `/resume`"
     )
+
+
+def format_trade_alert(alert: dict, quote: str) -> str:
+    """Render a per-fill Telegram alert. Buys show time + amount spent; sells show
+    a 🟢/🔴 header with the net P&L, plus the DB entry number for audit."""
+    from datetime import datetime, timezone
+
+    sym = alert.get("symbol", "?")
+    ts = alert.get("ts")
+    when = ""
+    if ts:
+        try:
+            when = datetime.fromtimestamp(int(ts) / 1000, tz=timezone.utc).strftime(
+                "%Y-%m-%d %H:%M UTC")
+        except (ValueError, OSError, TypeError):
+            when = str(ts)
+    price = alert.get("price") or 0.0
+    amount = alert.get("amount") or 0.0
+    tid = alert.get("trade_id")
+    fee = alert.get("fee_quote") or 0.0
+
+    if alert.get("is_entry"):
+        cost = alert.get("cost_quote") or 0.0
+        lines = [
+            f"🔵 *BUY* · {sym}",
+            f"🕐 {when}",
+            f"💵 spent {cost:.2f} {quote}",
+            f"📊 {amount:.6g} @ {price:,.4f}  (fee {fee:.2f})",
+            f"🗄 saved · DB entry #{tid}",
+        ]
+    else:
+        net = alert.get("net") or 0.0
+        proceeds = amount * price
+        circle = "🟢" if net > 0 else "🔴"
+        pct = ""
+        ep = alert.get("entry_price")
+        if ep:
+            pct = f"  ·  entry {ep:,.4f} → {(price - ep) / ep * 100:+.1f}%"
+        lines = [
+            f"{circle} *SELL* · {sym}  {net:+.2f} {quote}",
+            f"🕐 {when}",
+            f"💵 got {proceeds:.2f} {quote}  (net {net:+.2f} after {fee:.2f} fee){pct}",
+            f"📊 {amount:.6g} @ {price:,.4f}",
+            f"🗄 saved · DB entry #{tid}",
+        ]
+    return "\n".join(lines)

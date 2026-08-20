@@ -277,12 +277,22 @@ class TelegramConfig(BaseModel):
     approval_threshold_quote: float = Field(default=0.0, ge=0.0)
     approval_timeout_seconds: int = Field(default=300, gt=0)
     allowed_chat_ids: list[int] = Field(default_factory=list)
+    # require_approval False => entries auto-approve (the validated systematic
+    # posture); Telegram stays wired for alerts + /status + /pause.
+    require_approval: bool = True
+    # trade_alerts True => a Telegram message on every fill (buy + sell) with
+    # time, amount/PnL, a 🟢/🔴 header on sells, and the DB entry number.
+    trade_alerts: bool = True
 
 
 class ReportingConfig(BaseModel):
     weekly_enabled: bool = True
     weekly_day: int = Field(default=0, ge=0, le=6)  # 0=Mon .. 6=Sun
     weekly_hour_utc: int = Field(default=8, ge=0, le=23)
+    # Monthly deep-review (bad trades + missed opportunities) on day-of-month.
+    monthly_enabled: bool = True
+    monthly_day: int = Field(default=1, ge=1, le=28)   # 1..28 (safe for all months)
+    monthly_hour_utc: int = Field(default=8, ge=0, le=23)
     email_enabled: bool = False
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = Field(default=587, gt=0)

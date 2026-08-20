@@ -79,6 +79,43 @@ async def test_run_once_executes_and_persists(tmp_path) -> None:
     assert rows[0].valuation_pct == pytest.approx(-1.0)
 
 
+async def test_fill_delivers_trade_alert_with_db_id(tmp_path) -> None:
+    # a fill pushes a per-fill alert carrying the DB entry number
+    runner, trade_log, _ = build(tmp_path, BuyOnceStrategy())
+    sent: list = []
+
+    async def _capture(text):
+        sent.append(text)
+
+    runner.trade_alert = _capture
+    await runner.run_once("BTC/USD", now=NOW)
+    assert len(sent) == 1
+    db_id = trade_log.all()[0].id
+    assert "BUY" in sent[0] and f"DB entry #{db_id}" in sent[0]
+
+
+async def test_trade_alert_disabled_when_flag_off(tmp_path) -> None:
+    runner, _, _ = build(tmp_path, BuyOnceStrategy())
+    runner.cfg.telegram.trade_alerts = False
+    sent: list = []
+    runner.trade_alert = lambda text: sent.append(text)  # would blow up if awaited
+    await runner.run_once("BTC/USD", now=NOW)
+    assert sent == []  # skipped cleanly
+
+
+async def test_render_missed_summarizes_blocked_entries(tmp_path) -> None:
+    from types import SimpleNamespace
+    runner, _, _ = build(tmp_path, BuyOnceStrategy())
+    decisions = [
+        SimpleNamespace(is_entry=True, approved=False, gate="floor"),
+        SimpleNamespace(is_entry=True, approved=False, gate="floor"),
+        SimpleNamespace(is_entry=True, approved=True, gate="OK"),
+        SimpleNamespace(is_entry=False, approved=True, gate="OK"),
+    ]
+    out = runner._render_missed(decisions)
+    assert "Missed opportunities" in out and "floor: 2" in out
+
+
 async def test_run_once_persists_decision_log(tmp_path) -> None:
     # the DB-fill guarantee: a paper run records EVERY decision (not just fills)
     # to the decision log, so an unattended run accumulates the RL/analysis data.

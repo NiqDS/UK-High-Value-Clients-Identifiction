@@ -118,10 +118,13 @@ learning:
 
 telegram:
   enabled: true
+  require_approval: false          # AUTO-APPROVE + alerts (systematic posture — no per-trade tap)
+  trade_alerts: true               # message on every buy & sell (time, amount, P&L, DB id)
   approval_threshold_quote: 0.0
   approval_timeout_seconds: 300
   allowed_chat_ids: []             # EMPTY on this RU-cloud host — Telegram API is blocked here,
-                                   # so entries auto-approve. On the UK/EU host use: [460430602]
+                                   # so entries auto-approve. On a Telegram-reachable host (or the
+                                   # Mac with `run --chat-id 460430602`) you'll get live alerts.
 
 reporting:
   weekly_enabled: true

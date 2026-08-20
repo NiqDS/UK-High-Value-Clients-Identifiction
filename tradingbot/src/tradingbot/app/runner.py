@@ -59,6 +59,18 @@ def next_report_time(now: datetime, weekday: int, hour_utc: int) -> datetime:
     return candidate
 
 
+def next_monthly_time(now: datetime, day: int, hour_utc: int) -> datetime:
+    """Next UTC datetime at the given day-of-month (1..28) and hour, strictly
+    after ``now`` (rolls to next month if this month's slot has passed)."""
+    day = max(1, min(28, day))
+    candidate = now.replace(day=day, hour=hour_utc, minute=0, second=0, microsecond=0)
+    if candidate <= now:
+        year = now.year + (1 if now.month == 12 else 0)
+        month = 1 if now.month == 12 else now.month + 1
+        candidate = candidate.replace(year=year, month=month)
+    return candidate
+
+
 class TradingRunner:
     def __init__(
         self,
@@ -75,6 +87,7 @@ class TradingRunner:
         health: HealthMonitor | None = None,
         reporter=None,
         report_deliver=None,  # async (text) -> None  (e.g. Telegram)
+        trade_alert=None,     # async (text) -> None  (per-fill buy/sell alerts)
         report_path: str | None = None,
         email_sender=None,    # EmailSender | None
         regime_overlay=None,  # CycleRegimeOverlay | None
@@ -94,6 +107,7 @@ class TradingRunner:
         self.health = health
         self.reporter = reporter
         self.report_deliver = report_deliver
+        self.trade_alert = trade_alert
         self.report_path = report_path
         self.email_sender = email_sender
         self.regime_overlay = regime_overlay
@@ -272,7 +286,9 @@ class TradingRunner:
             ticker=ticker, now=now,
         )
         results = await self.pipeline.process_signals(intents, snapshot)
-        self._apply_fills(results, now)
+        alerts = self._apply_fills(results, now)
+        for a in alerts:
+            await self._deliver_trade_alert(a)
         return results
 
     def _normalize_exits(self, symbol: str, intents: list[OrderIntent]) -> list[OrderIntent]:
@@ -412,8 +428,11 @@ class TradingRunner:
             bucket=now.strftime("%GW%V"),
         )
 
-    def _apply_fills(self, results: list[PipelineResult], now: datetime) -> None:
+    def _apply_fills(self, results: list[PipelineResult], now: datetime) -> list[dict]:
+        """Record every fill; return a per-fill alert payload (incl. the DB entry
+        id) so the caller can push a Telegram alert. Kept sync + testable."""
         filled_any = False
+        alerts: list[dict] = []
         for r in results:
             self._log_decision(r, now)  # capture the full decision stream first
             if r.outcome is not Outcome.EXECUTED or r.execution is None or r.execution.fill is None:
@@ -431,12 +450,13 @@ class TradingRunner:
                 take_profit=intent.take_profit_price, stop=intent.stop_price,
                 trail_distance=(intent.metadata or {}).get("trail_distance"),
             )
+            net = None
             if f.side == Side.SELL:
                 net = realized - f.fee_quote
                 self.store.record_realized_pnl(now, net)
                 if net < 0:
                     self._record_own_loss(f, intent, entry_price, net, now)
-            self.trade_log.record(
+            trade_id = self.trade_log.record(
                 ts=f.timestamp, symbol=f.symbol, side=f.side.value, price=f.price,
                 amount=f.amount, cost_quote=f.cost_quote, fee_quote=f.fee_quote,
                 role=f.role.value, is_entry=intent.is_entry, realized_pnl=realized,
@@ -444,12 +464,30 @@ class TradingRunner:
                 client_order_id=f.client_order_id,
                 risk_pct=(r.decision.risk_pct_equity if r.decision else None),
             )
+            alerts.append({
+                "symbol": f.symbol, "side": f.side.value, "is_entry": intent.is_entry,
+                "price": f.price, "amount": f.amount, "cost_quote": f.cost_quote,
+                "fee_quote": f.fee_quote, "realized": realized, "net": net,
+                "entry_price": entry_price, "trade_id": trade_id, "ts": f.timestamp,
+            })
         if filled_any:
             # a fill moved real balance — the next symbol's floor/sizing checks
             # must see it, so drop the cached equity immediately
             self._equity_cache = None
             if self.position_store is not None:
                 self.position_store.save(self.portfolio)
+        return alerts
+
+    async def _deliver_trade_alert(self, alert: dict) -> None:
+        """Push a per-fill buy/sell alert to Telegram (never raises — a failed
+        alert must not stop trading)."""
+        if self.trade_alert is None or not self.cfg.telegram.trade_alerts:
+            return
+        try:
+            from ..approval.messages import format_trade_alert
+            await self.trade_alert(format_trade_alert(alert, self.cfg.exchange.quote_currency))
+        except Exception:
+            logger.exception("trade alert delivery failed (continuing)")
 
     # -- weekly report ------------------------------------------------------
     def _market_returns(self) -> dict[str, float]:
@@ -518,6 +556,68 @@ class TradingRunner:
                 logger.exception("learning report telegram delivery failed")
         return report
 
+    def _render_missed(self, decisions) -> str:
+        """Missed opportunities = entries the algo wanted but a gate/kill-switch
+        blocked. Surfaces whether the risk caps are turning away real trades."""
+        from collections import Counter
+        entries = [d for d in decisions if d.is_entry]
+        blocked = Counter(d.gate for d in entries
+                          if not d.approved and d.gate and d.gate != "OK")
+        lines = ["*Missed opportunities (30d)* — breakouts the algo wanted but didn't take:"]
+        if not entries:
+            lines.append("- no entry signals in the window")
+        elif not blocked:
+            lines.append("- none — every attempted entry went through.")
+        else:
+            for gate, n in blocked.most_common():
+                lines.append(f"- {gate}: {n}")
+            lines.append("(entries a risk gate / kill switch turned away — review whether the "
+                         "caps are too tight, or if these were correctly avoided)")
+        return "\n".join(lines)
+
+    async def emit_monthly_review(self, now: datetime | None = None) -> str | None:
+        """Monthly deep review: 30-day performance + bad-trade learning assessment
+        + missed-opportunity summary. Delivered to Telegram, written to reports/."""
+        now = now or datetime.now(timezone.utc)
+        parts: list[str] = ["📅 *Monthly review* — performance, bad trades & missed opportunities"]
+        if self.reporter is not None:
+            try:
+                parts.append(self.reporter.generate(
+                    now=now, days=30, market_returns_pct=self._market_returns(),
+                    quote=self.cfg.exchange.quote_currency))
+            except Exception:
+                logger.exception("monthly performance report failed")
+        lc = self.cfg.learning
+        if lc.enabled:
+            try:
+                from ..learning.loop import (assess, paired_samples_from_db,
+                                             render_learning_report)
+                own = paired_samples_from_db(self.trade_log.all())
+                parts.append(render_learning_report(assess(
+                    own, [], min_trades=lc.min_trades_per_bucket,
+                    quote=self.cfg.exchange.quote_currency)))
+            except Exception:
+                logger.exception("monthly learning assessment failed")
+        if self.decision_log is not None:
+            try:
+                decisions = self.decision_log.between(now - timedelta(days=30), now)
+                parts.append(self._render_missed(decisions))
+            except Exception:
+                logger.exception("monthly missed-opportunity summary failed")
+        text = "\n\n".join(p for p in parts if p)
+        try:
+            from pathlib import Path
+            Path("reports").mkdir(parents=True, exist_ok=True)
+            Path("reports/monthly_review_latest.md").write_text(text)
+        except Exception:
+            logger.exception("could not write monthly review")
+        if self.report_deliver is not None:
+            try:
+                await self.report_deliver(text)
+            except Exception:
+                logger.exception("monthly review telegram delivery failed")
+        return text
+
     # -- main loop ----------------------------------------------------------
     def request_stop(self) -> None:
         self._stop.set()
@@ -546,8 +646,13 @@ class TradingRunner:
             next_report_time(datetime.now(timezone.utc), rep.weekly_day, rep.weekly_hour_utc)
             if rep.weekly_enabled else None
         )
-        logger.info("Runner started (dry_run=%s, symbols=%s); next weekly report: %s",
-                    self.cfg.app.dry_run, self.cfg.exchange.symbols_allowlist, next_report)
+        next_monthly = (
+            next_monthly_time(datetime.now(timezone.utc), rep.monthly_day, rep.monthly_hour_utc)
+            if rep.monthly_enabled else None
+        )
+        logger.info("Runner started (dry_run=%s, symbols=%s); next weekly: %s; next monthly: %s",
+                    self.cfg.app.dry_run, self.cfg.exchange.symbols_allowlist,
+                    next_report, next_monthly)
         try:
             while not self._stop.is_set():
                 for symbol in self.cfg.exchange.symbols_allowlist:
@@ -561,6 +666,9 @@ class TradingRunner:
                     if self.cfg.learning.enabled and self.cfg.learning.weekly:
                         await self.emit_learning(now)
                     next_report = next_report_time(now, rep.weekly_day, rep.weekly_hour_utc)
+                if next_monthly is not None and now >= next_monthly:
+                    await self.emit_monthly_review(now)
+                    next_monthly = next_monthly_time(now, rep.monthly_day, rep.monthly_hour_utc)
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=interval)
                 except asyncio.TimeoutError:

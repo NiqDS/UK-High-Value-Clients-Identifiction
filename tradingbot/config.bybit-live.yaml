@@ -139,14 +139,23 @@ learning:
 #     silently deadlock every trade in PENDING_APPROVAL.
 telegram:
   enabled: true
-  approval_threshold_quote: 0.0     # 0 => approve EVERY entry manually
-  approval_timeout_seconds: 300     # no tap in time => entry is dropped (safe default)
-  allowed_chat_ids: []              # REQUIRED before Step 2: your numeric chat id, e.g. [123456789]
+  require_approval: false           # AUTO-APPROVE — the validated systematic posture: no manual
+                                    # tap per trade (human discretion degrades a proven edge and
+                                    # a missed tap can cost a concentrated winner). Alerts + kill
+                                    # switch stay on. Set true only for a short training-wheels period.
+  trade_alerts: true                # a Telegram message on every buy & sell (time, amount, P&L, DB id)
+  approval_threshold_quote: 0.0
+  approval_timeout_seconds: 300
+  allowed_chat_ids: []              # your numeric chat id, e.g. [460430602] — on a Telegram-reachable
+                                    # (UK/EU) host. Kept empty on the RU-cloud box (Telegram blocked).
 
 reporting:
   weekly_enabled: true
   weekly_day: 0
   weekly_hour_utc: 8
+  monthly_enabled: true             # monthly deep review: performance + bad trades + missed ops
+  monthly_day: 1
+  monthly_hour_utc: 8
   email_enabled: false
 
 # --- App / runtime ---------------------------------------------------------

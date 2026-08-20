@@ -113,6 +113,8 @@ learning:
 
 telegram:
   enabled: true
+  require_approval: false           # AUTO-APPROVE + alerts (systematic posture — no per-trade tap)
+  trade_alerts: true                # message on every buy & sell (time, amount, P&L, DB id)
   approval_threshold_quote: 0.0
   approval_timeout_seconds: 300
   allowed_chat_ids: []              # add [460430602] on the UK/EU host (Telegram API is blocked
@@ -122,6 +124,9 @@ reporting:
   weekly_enabled: true
   weekly_day: 0
   weekly_hour_utc: 8
+  monthly_enabled: true
+  monthly_day: 1
+  monthly_hour_utc: 8
   email_enabled: false
 
 app:
