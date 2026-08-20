@@ -1449,6 +1449,12 @@ def main() -> int:
     if args.command == "backtest":
         return _backtest(settings, args)
     if args.command == "run":
+        # --chat-id: enable Telegram approvals for this run without editing the
+        # config (handy for a live message test on a Telegram-reachable host).
+        if getattr(args, "chat_id", None):
+            settings.config.telegram.allowed_chat_ids = [args.chat_id]
+            logger.warning("--chat-id override: Telegram approvals ON for chat %s this run",
+                           args.chat_id)
         _print_config_summary(settings)
         return asyncio.run(_run(settings))
     if args.command == "weekly-report":
