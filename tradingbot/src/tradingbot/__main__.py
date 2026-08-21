@@ -1127,6 +1127,54 @@ def _backtest_learn(settings: Settings, args) -> int:
     return 0
 
 
+def _walkforward_select(settings: Settings, args) -> int:
+    import datetime as _dt
+    from pathlib import Path
+
+    from .analysis.walkforward_selection import render_walkforward_report, walkforward_select
+    from .backtest.data import load_csv
+    from .backtest.engine import BacktestConfig
+
+    if not args.asset:
+        logger.error("pass --asset LABEL=path.csv for each coin (the basket to test)")
+        return 2
+    if not args.split_date:
+        logger.error("--split-date YYYY-MM-DD is required (train before it, test after)")
+        return 2
+    try:
+        d = _dt.datetime.strptime(args.split_date, "%Y-%m-%d").replace(tzinfo=_dt.timezone.utc)
+    except ValueError:
+        logger.error("bad --split-date %r — use YYYY-MM-DD", args.split_date)
+        return 2
+    split_ms = int(d.timestamp() * 1000)
+
+    assets = []
+    for spec in args.asset:
+        label, _, rest = spec.partition("=")
+        path = rest.split("@", 1)[0] if rest else ""
+        if not label or not path or not Path(path).exists():
+            logger.error("bad/missing --asset %r", spec)
+            return 2
+        candles = load_csv(path)
+        if len(candles) < 120:
+            logger.error("%s has only %d bars — need history each side of the split", path,
+                         len(candles))
+            return 2
+        assets.append((label, candles))
+
+    bt = BacktestConfig(initial_equity=args.equity, fee_pct=args.fee, slippage_pct=args.slippage)
+    top_k = args.top_k if args.top_k else None
+    wf = walkforward_select(assets, settings.config.strategy, bt, split_ms, top_k=top_k)
+    report = render_walkforward_report(wf, settings.config.strategy,
+                                       label=f"{len(assets)} coins")
+    print(report)
+    if args.report:
+        Path(args.report).parent.mkdir(parents=True, exist_ok=True)
+        Path(args.report).write_text(report + "\n")
+        logger.info("wrote walkforward-select report to %s", args.report)
+    return 0
+
+
 def _event_proximity(settings: Settings, args) -> int:
     from pathlib import Path
 
@@ -1365,7 +1413,8 @@ def main() -> int:
                  "regime", "fetch-funding", "fetch-onchain", "cross-asset", "robustness",
                  "trend-sweep", "portfolio", "risk-report", "learn", "risk-sweep",
                  "deploy-sweep", "db-stats", "screen-candidate", "backtest-learn",
-                 "price-timeline", "event-proximity", "telegram-test"],
+                 "price-timeline", "event-proximity", "telegram-test",
+                 "walkforward-select"],
     )
     parser.add_argument("--config", default="config.yaml", help="path to config.yaml")
     parser.add_argument("--env-file", default=".env", help="path to .env")
@@ -1435,6 +1484,9 @@ def main() -> int:
                              "(default 15)")
     parser.add_argument("--window-days", type=int, default=3,
                         help="event-proximity: ± days around an event to count an entry as NEAR")
+    parser.add_argument("--split-date", default=None,
+                        help="walkforward-select: YYYY-MM-DD boundary (rank coins on TRAIN before "
+                             "it, trade that set on TEST after it)")
     parser.add_argument("--message", default=None,
                         help="telegram-test: custom test message text")
     parser.add_argument("--chat-id", type=int, default=None,
@@ -1520,6 +1572,8 @@ def main() -> int:
         return _event_proximity(settings, args)
     if args.command == "telegram-test":
         return _telegram_test(settings, args)
+    if args.command == "walkforward-select":
+        return _walkforward_select(settings, args)
     return 2  # pragma: no cover
 
 
