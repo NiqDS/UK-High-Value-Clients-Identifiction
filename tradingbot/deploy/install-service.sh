@@ -7,12 +7,18 @@
 #     bash install-service.sh
 # Or pass a different config:
 #     bash install-service.sh config.bybit-live.yaml
+#
+# TWO BUCKETS side by side — pass a NAME suffix as the 2nd arg to run more than
+# one service concurrently (each needs its OWN db_url in its config):
+#     bash install-service.sh config.bybit-daily-paper.yaml  daily   # -> tradingbot-daily
+#     bash install-service.sh config.bybit-test-active.yaml  15m     # -> tradingbot-15m
 # =============================================================================
 set -euo pipefail
 
 CONFIG="${1:-config.bybit-test-active.yaml}"
+SUFFIX="${2:-}"
 APP_DIR="$HOME/UK-High-Value-Clients-Identifiction/tradingbot"
-SERVICE_NAME="tradingbot"
+SERVICE_NAME="tradingbot${SUFFIX:+-$SUFFIX}"
 RUN_USER="$(id -un)"
 
 if [ ! -f "$APP_DIR/.env" ]; then
@@ -74,7 +80,6 @@ Service installed and running. It now survives crashes AND reboots.
   status:         systemctl status ${SERVICE_NAME}
   restart:        sudo systemctl restart ${SERVICE_NAME}
   stop:           sudo systemctl stop ${SERVICE_NAME}
-  bot's own log:  tail -f ${APP_DIR}/data/test_active.log
   DB progress:    cd ${APP_DIR} && ./.venv/bin/python -m tradingbot --config ${CONFIG} db-stats
 ------------------------------------------------------------------------------
 MSG
