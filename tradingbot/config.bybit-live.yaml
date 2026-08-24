@@ -144,6 +144,8 @@ telegram:
                                     # a missed tap can cost a concentrated winner). Alerts + kill
                                     # switch stay on. Set true only for a short training-wheels period.
   trade_alerts: true                # a Telegram message on every buy & sell (time, amount, P&L, DB id)
+  label: "DAILY"                    # headline tag so a 4h paper bucket's alerts are distinguishable
+  commands_enabled: true            # the live daily bucket owns the /commands poller
   approval_threshold_quote: 0.0
   approval_timeout_seconds: 300
   allowed_chat_ids: []              # your numeric chat id, e.g. [460430602] — on a Telegram-reachable

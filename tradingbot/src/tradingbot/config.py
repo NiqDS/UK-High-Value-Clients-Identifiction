@@ -283,6 +283,13 @@ class TelegramConfig(BaseModel):
     # trade_alerts True => a Telegram message on every fill (buy + sell) with
     # time, amount/PnL, a 🟢/🔴 header on sells, and the DB entry number.
     trade_alerts: bool = True
+    # headline tag on every alert (e.g. "DAILY" / "4h") so multiple buckets are
+    # distinguishable in one Telegram chat.
+    label: str = ""
+    # commands_enabled False => alerts-only: the bot sends messages but does NOT
+    # poll for /commands. Set False on a SECOND bucket sharing one bot token, so
+    # only ONE service polls getUpdates (Telegram allows just one poller/token).
+    commands_enabled: bool = True
 
 
 class ReportingConfig(BaseModel):

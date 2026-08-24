@@ -31,6 +31,17 @@ def test_sell_profit_is_green_with_net_and_id() -> None:
     assert "DB entry #143" in msg
 
 
+def test_label_tags_the_header() -> None:
+    buy = {"symbol": "BTC/USDT", "is_entry": True, "price": 100.0, "amount": 1.0,
+           "cost_quote": 100.0, "fee_quote": 0.1, "trade_id": 1, "ts": TS}
+    assert "*[4h] BUY*" in format_trade_alert(buy, "USDT", label="4h")
+    sell = {"symbol": "BTC/USDT", "is_entry": False, "price": 110.0, "amount": 1.0,
+            "fee_quote": 0.1, "net": 9.9, "entry_price": 100.0, "trade_id": 2, "ts": TS}
+    assert "*[DAILY] SELL*" in format_trade_alert(sell, "USDT", label="DAILY")
+    # no label -> no tag
+    assert "[" not in format_trade_alert(buy, "USDT").splitlines()[0]
+
+
 def test_sell_loss_is_red() -> None:
     a = {"symbol": "ADA/USDT", "side": "sell", "is_entry": False, "price": 0.1712,
          "amount": 134.0, "cost_quote": 22.9, "fee_quote": 0.02, "realized": -0.30,

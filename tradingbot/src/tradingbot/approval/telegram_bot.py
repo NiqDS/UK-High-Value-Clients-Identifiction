@@ -195,6 +195,11 @@ class TelegramApprovalBot:
             self.build_application()
         await self._app.initialize()
         await self._app.start()
+        # Alerts-only mode (a second bucket sharing one bot token): send messages
+        # but do NOT poll getUpdates — Telegram allows only one poller per token.
+        if not self.config.telegram.commands_enabled:
+            logger.info("Telegram: alerts-only (no command polling) for this bucket.")
+            return
         await self._register_command_menu()
         await self._app.updater.start_polling()
         logger.info("Telegram bot started (allowlist: %s)", self.allowlist or "EMPTY — nobody authorised")
@@ -202,6 +207,7 @@ class TelegramApprovalBot:
     async def stop(self) -> None:
         if self._app is None:
             return
-        await self._app.updater.stop()
+        if self.config.telegram.commands_enabled and self._app.updater.running:
+            await self._app.updater.stop()
         await self._app.stop()
         await self._app.shutdown()

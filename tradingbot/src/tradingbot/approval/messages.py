@@ -97,10 +97,13 @@ def render_settings(settings: dict, quote: str = "USD") -> str:
     )
 
 
-def format_trade_alert(alert: dict, quote: str) -> str:
+def format_trade_alert(alert: dict, quote: str, label: str = "") -> str:
     """Render a per-fill Telegram alert. Buys show time + amount spent; sells show
-    a 🟢/🔴 header with the net P&L, plus the DB entry number for audit."""
+    a 🟢/🔴 header with the net P&L, plus the DB entry number for audit. ``label``
+    (e.g. "4h") tags the header so multiple buckets are distinguishable."""
     from datetime import datetime, timezone
+
+    tag = f"[{label}] " if label else ""
 
     sym = alert.get("symbol", "?")
     ts = alert.get("ts")
@@ -119,7 +122,7 @@ def format_trade_alert(alert: dict, quote: str) -> str:
     if alert.get("is_entry"):
         cost = alert.get("cost_quote") or 0.0
         lines = [
-            f"🔵 *BUY* · {sym}",
+            f"🔵 *{tag}BUY* · {sym}",
             f"🕐 {when}",
             f"💵 spent {cost:.2f} {quote}",
             f"📊 {amount:.6g} @ {price:,.4f}  (fee {fee:.2f})",
@@ -134,7 +137,7 @@ def format_trade_alert(alert: dict, quote: str) -> str:
         if ep:
             pct = f"  ·  entry {ep:,.4f} → {(price - ep) / ep * 100:+.1f}%"
         lines = [
-            f"{circle} *SELL* · {sym}  {net:+.2f} {quote}",
+            f"{circle} *{tag}SELL* · {sym}  {net:+.2f} {quote}",
             f"🕐 {when}",
             f"💵 got {proceeds:.2f} {quote}  (net {net:+.2f} after {fee:.2f} fee){pct}",
             f"📊 {amount:.6g} @ {price:,.4f}",

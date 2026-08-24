@@ -485,7 +485,8 @@ class TradingRunner:
             return
         try:
             from ..approval.messages import format_trade_alert
-            await self.trade_alert(format_trade_alert(alert, self.cfg.exchange.quote_currency))
+            await self.trade_alert(format_trade_alert(
+                alert, self.cfg.exchange.quote_currency, label=self.cfg.telegram.label))
         except Exception:
             logger.exception("trade alert delivery failed (continuing)")
 
