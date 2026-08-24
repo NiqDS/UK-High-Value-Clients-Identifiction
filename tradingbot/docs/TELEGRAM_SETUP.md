@@ -46,6 +46,7 @@ else who finds the bot is ignored.
 Start the bot (`... run`). In Telegram you can now use:
 
 - `/status` — balance, open positions, risk state, kill-switch/event windows
+- `/report` — full performance summary (trades, win rate, net P&L, per-coin)
 - `/pause` / `/resume` — halt / resume trading manually
 - `/settings` (or `/menu`) — runtime controls
 

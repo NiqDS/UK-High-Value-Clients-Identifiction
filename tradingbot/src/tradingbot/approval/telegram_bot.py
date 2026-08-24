@@ -36,12 +36,14 @@ class TelegramApprovalBot:
         manager: ApprovalManager,
         settings: SettingsController,
         status: StatusReporter,
+        report_provider=None,  # async () -> str  (full db-stats performance report)
     ) -> None:
         self.token = token
         self.config = config
         self.manager = manager
         self.settings = settings
         self.status = status
+        self.report_provider = report_provider
         self._app = None  # telegram Application, built in start()
 
     @property
@@ -97,6 +99,21 @@ class TelegramApprovalBot:
             return
         await update.message.reply_text(await self.status.build(), parse_mode="Markdown")
 
+    async def _on_report(self, update, context) -> None:
+        if not self._authed(update):
+            return
+        if self.report_provider is None:
+            await update.message.reply_text("Performance report is not available.")
+            return
+        try:
+            text = await self.report_provider()
+        except Exception:
+            logger.exception("report generation failed")
+            await update.message.reply_text("Couldn't build the report — check the server logs.")
+            return
+        # wrap in a code block so the table columns stay aligned (monospace)
+        await update.message.reply_text(f"```\n{text}\n```", parse_mode="Markdown")
+
     async def _on_settings(self, update, context) -> None:
         if not self._authed(update):
             return
@@ -137,6 +154,7 @@ class TelegramApprovalBot:
 
         app = Application.builder().token(self.token).build()
         app.add_handler(CommandHandler("status", self._on_status))
+        app.add_handler(CommandHandler("report", self._on_report))
         app.add_handler(CommandHandler(["settings", "menu"], self._on_settings))
         app.add_handler(CommandHandler("pause", self._on_pause))
         app.add_handler(CommandHandler("resume", self._on_resume))

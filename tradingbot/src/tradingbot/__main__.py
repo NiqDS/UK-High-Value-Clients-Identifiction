@@ -771,7 +771,17 @@ def _build_runner(settings: Settings):
                                       overrides=JsonOverrideStore("runtime_overrides.json"))
         bot_holder: dict = {}
         manager = ApprovalManager(_LazyNotifier(bot_holder), cfg.telegram.approval_timeout_seconds)
-        bot = TelegramApprovalBot(token, cfg, manager, controls, status)
+
+        async def report_provider():
+            # /report -> full db-stats performance summary (runs the sync DB read
+            # off the event loop so a query never blocks the bot).
+            from .analysis.db_stats import render_db_stats
+            return await asyncio.to_thread(
+                lambda: render_db_stats(trade_log.all(), decision_log.all(),
+                                        cfg.exchange.quote_currency))
+
+        bot = TelegramApprovalBot(token, cfg, manager, controls, status,
+                                  report_provider=report_provider)
         bot_holder["bot"] = bot
         # require_approval False => auto-approve entries but keep the bot for
         # alerts, /status, /pause (the validated systematic posture).

@@ -93,7 +93,7 @@ def render_settings(settings: dict, quote: str = "USD") -> str:
         "`/set_threshold <amt>`  `/set_max_notional <amt>`\n"
         "`/set_max_trades <n>`  `/set_daily_loss <amt>`\n"
         "`/set_buy_floor <pct>`  `/set_force_exit <pct>`\n"
-        "`/pause`  `/resume`"
+        "`/status`  `/report`  `/pause`  `/resume`"
     )
 
 
