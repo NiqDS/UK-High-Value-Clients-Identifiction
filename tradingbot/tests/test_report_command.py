@@ -53,3 +53,17 @@ async def test_report_without_provider_is_graceful() -> None:
     msg = _Msg()
     await bot._on_report(_Update(42, msg), None)
     assert len(msg.sent) == 1 and "not available" in msg.sent[0][0].lower()
+
+
+async def test_command_menu_registers_visible_commands() -> None:
+    bot = _bot()
+    captured: dict = {}
+
+    class _TgBot:
+        async def set_my_commands(self, commands):
+            captured["cmds"] = commands
+
+    bot._app = type("App", (), {"bot": _TgBot()})()
+    await bot._register_command_menu()
+    names = [c.command for c in captured["cmds"]]
+    assert {"status", "report", "pause", "resume", "settings"} <= set(names)

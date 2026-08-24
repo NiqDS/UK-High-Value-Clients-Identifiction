@@ -174,11 +174,28 @@ class TelegramApprovalBot:
         self._app = app
         return app
 
+    async def _register_command_menu(self) -> None:
+        """Populate the '/' autocomplete menu shown in the Telegram app, so the
+        commands are discoverable without BotFather setup."""
+        from telegram import BotCommand
+        commands = [
+            BotCommand("status", "Balance, positions, risk & kill-switch state"),
+            BotCommand("report", "Full performance summary (P&L, per-coin)"),
+            BotCommand("pause", "Halt new trading"),
+            BotCommand("resume", "Resume trading"),
+            BotCommand("settings", "Show & change runtime controls"),
+        ]
+        try:
+            await self._app.bot.set_my_commands(commands)
+        except Exception:
+            logger.exception("could not register the Telegram command menu (continuing)")
+
     async def start(self) -> None:
         if self._app is None:
             self.build_application()
         await self._app.initialize()
         await self._app.start()
+        await self._register_command_menu()
         await self._app.updater.start_polling()
         logger.info("Telegram bot started (allowlist: %s)", self.allowlist or "EMPTY — nobody authorised")
 
