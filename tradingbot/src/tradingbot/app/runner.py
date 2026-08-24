@@ -490,6 +490,12 @@ class TradingRunner:
         except Exception:
             logger.exception("trade alert delivery failed (continuing)")
 
+    def _labeled(self, text: str) -> str:
+        """Prefix a delivered report with the bucket label so multiple buckets'
+        reports are distinguishable in one Telegram chat."""
+        lbl = self.cfg.telegram.label
+        return f"[{lbl}]\n{text}" if lbl else text
+
     # -- weekly report ------------------------------------------------------
     def _market_returns(self) -> dict[str, float]:
         out: dict[str, float] = {}
@@ -512,7 +518,7 @@ class TradingRunner:
             Path(self.report_path).write_text(text)
         if self.report_deliver is not None:
             try:
-                await self.report_deliver(text)
+                await self.report_deliver(self._labeled(text))
             except Exception:
                 logger.exception("weekly report telegram delivery failed")
         if self.email_sender is not None:
@@ -552,7 +558,7 @@ class TradingRunner:
             logger.exception("could not write learning report")
         if self.report_deliver is not None:
             try:
-                await self.report_deliver(report)
+                await self.report_deliver(self._labeled(report))
             except Exception:
                 logger.exception("learning report telegram delivery failed")
         return report
@@ -614,7 +620,7 @@ class TradingRunner:
             logger.exception("could not write monthly review")
         if self.report_deliver is not None:
             try:
-                await self.report_deliver(text)
+                await self.report_deliver(self._labeled(text))
             except Exception:
                 logger.exception("monthly review telegram delivery failed")
         return text
