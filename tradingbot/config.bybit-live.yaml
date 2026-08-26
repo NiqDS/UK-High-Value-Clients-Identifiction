@@ -1,7 +1,7 @@
 # =============================================================================
 # LIVE config — Bybit MAINNET / 7-coin daily Donchian trend basket (USDT)
 # -----------------------------------------------------------------------------
-# Capital limit: ~180 USDT, split into 7 equal ~23-USDT sleeves.
+# Capital limit: ~206 USDT, split into 7 equal ~27-USDT sleeves.
 #
 # >>> TWO-STEP CUTOVER — read this before running. <<<
 #
@@ -17,7 +17,7 @@
 #   Now the LiveBroker places REAL orders with REAL funds. Only do this after a
 #   clean Step-1 run AND with a TRADE+READ key that has WITHDRAWALS DISABLED.
 #
-# Funding: deposit/convert ~180 USDT on Bybit. USDT-quoted (USD-pegged) — a small
+# Funding: deposit/convert ~206 USDT on Bybit. USDT-quoted (USD-pegged) — a small
 # GBP/USD FX layer vs holding GBP.
 # =============================================================================
 
@@ -39,16 +39,16 @@ exchange:
   options:
     defaultType: spot        # SPOT only (UK = no derivatives)
 
-# --- Hard risk layer. ~180 USDT across 7 equal ~23-USDT sleeves. ------------
-# Absolute notional caps define the sleeve; 7 x 23 = 161 deployed + floor leaves
-# headroom. Keep this account funded with ~180 USDT and nothing more — the bot
-# can only ever touch what's in this account.
+# --- Hard risk layer. ~206 USDT across 7 equal ~27-USDT sleeves. ------------
+# Absolute notional caps define the sleeve; 7 x 27 = 189 deployed + 15 floor/buffer
+# leaves ~2 headroom. Keep this account funded with ~206 USDT and nothing more —
+# the bot can only ever touch what's in this account.
 risk:
   floor_quote: 10.0                 # hard reserve; breach HALTS trading
   floor_buffer_quote: 5.0
   min_notional_per_trade_quote: 5.0    # verify Bybit's per-symbol spot minimum (~1-5 USDT)
-  max_notional_per_trade_quote: 26.0   # caps a sleeve (~23)
-  max_notional_per_trade_pct_equity: 15.0   # 15% of ~180 ≈ 27; absolute cap binds first
+  max_notional_per_trade_quote: 30.0   # caps a sleeve (~27)
+  max_notional_per_trade_pct_equity: 15.0   # 15% of ~206 ≈ 31; absolute cap binds first
   per_trade_risk_pct: 15.0          # non-binding BY DESIGN: the Donchian stop is the wide
                                     # channel low (can sit 30-40% below entry) and the SLEEVE
                                     # is the real per-coin risk bound — a tighter % here
@@ -57,8 +57,8 @@ risk:
   max_open_positions: 7             # one sleeve per coin
   max_concurrent_open_orders: 8
   max_trades_per_day: 14
-  max_daily_traded_notional_quote: 180.0
-  max_daily_loss_quote: 25.0        # ~14% of the book — daily circuit breaker -> halt
+  max_daily_traded_notional_quote: 206.0
+  max_daily_loss_quote: 28.0        # ~14% of the book — daily circuit breaker -> halt
   daily_reset_utc_hour: 0
 
 # --- Fees: Bybit spot ~0.10% maker/taker (pull real tier once keyed). -------
@@ -79,7 +79,7 @@ strategy:
   name: donchian_breakout
   timeframe: 1d
   ohlcv_limit: 120
-  target_notional_quote: 23.0       # per-sleeve deployment (~180 USDT / 7, with buffer)
+  target_notional_quote: 27.0       # per-sleeve deployment (~206 USDT / 7, with buffer)
   take_profit_pct: 1.5              # unused by donchian — kept valid for the loader
   stop_loss_pct: 1.0
   vwap_filter_enabled: false
@@ -164,7 +164,7 @@ reporting:
 app:
   dry_run: true                     # STEP 1: paper on LIVE data (no real orders). Flip to
                                     # FALSE for STEP 2 (REAL MONEY) after a clean Step-1 run.
-  paper_equity: 180.0               # sizes the Step-1 paper run if balance can't be read
+  paper_equity: 206.0               # sizes the Step-1 paper run if balance can't be read
   trading_enabled: true
   log_level: INFO
   log_json: false
