@@ -152,7 +152,19 @@ class TelegramApprovalBot:
             CommandHandler,
         )
 
-        app = Application.builder().token(self.token).build()
+        app = (
+            Application.builder()
+            .token(self.token)
+            # Bound every Telegram HTTP call so a slow/blocked api.telegram.org
+            # fails FAST instead of stalling. Telegram is a side-channel
+            # (alerts/commands) and must never hold the trading loop hostage.
+            .connect_timeout(10.0)
+            .read_timeout(10.0)
+            .write_timeout(10.0)
+            .pool_timeout(5.0)
+            .get_updates_read_timeout(30.0)
+            .build()
+        )
         app.add_handler(CommandHandler("status", self._on_status))
         app.add_handler(CommandHandler("report", self._on_report))
         app.add_handler(CommandHandler(["settings", "menu"], self._on_settings))

@@ -50,9 +50,18 @@ StartLimitBurst=10
 Type=simple
 User=${RUN_USER}
 WorkingDirectory=${APP_DIR}
+# Unbuffered stdout/stderr so logs reach journald in REAL TIME. Without this,
+# Python block-buffers under systemd and the service looks silent/dead even
+# while running — which made the last incident impossible to diagnose live.
+Environment=PYTHONUNBUFFERED=1
 ExecStart=${APP_DIR}/.venv/bin/python -m tradingbot --config ${CONFIG} run
 Restart=always
 RestartSec=10
+# Contain memory so a spike is throttled on THIS service instead of pushing the
+# whole (small) box into swap-thrash. Soft cap reclaims first; hard cap OOM-kills
+# only this unit (systemd then restarts it) rather than freezing the instance.
+MemoryHigh=320M
+MemoryMax=400M
 # graceful shutdown: the runner stops cleanly on SIGTERM
 KillSignal=SIGTERM
 TimeoutStopSec=30

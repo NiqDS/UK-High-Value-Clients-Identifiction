@@ -869,12 +869,26 @@ async def _run(settings: Settings) -> int:
         except NotImplementedError:  # pragma: no cover - e.g. Windows
             pass
     if bot is not None:
-        await bot.start()
+        try:
+            await bot.start()
+        except Exception:
+            # Telegram is a side-channel. If it can't reach api.telegram.org
+            # (timeout / block / outage) the TRADING LOOP MUST STILL RUN — losing
+            # alerts is acceptable; halting a live strategy over a chat outage is
+            # not. Degrade to no-Telegram and carry on.
+            logger.exception(
+                "Telegram failed to start (unreachable/timeout?) — continuing WITHOUT "
+                "alerts & commands. The trading loop is UNAFFECTED and runs normally."
+            )
     try:
         await runner.run()
     finally:
         if bot is not None:
-            await bot.stop()
+            try:
+                await bot.stop()
+            except Exception:
+                logger.debug("Telegram stop() raised during shutdown (ignored).",
+                             exc_info=True)
     return 0
 
 
