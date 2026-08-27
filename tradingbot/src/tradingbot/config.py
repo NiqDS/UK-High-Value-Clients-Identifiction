@@ -306,6 +306,12 @@ class ReportingConfig(BaseModel):
     smtp_use_tls: bool = True
     email_from: str = ""
     email_to: list[str] = Field(default_factory=list)
+    # Extra bucket databases to append to the /report output, so the command that
+    # owns the poller (the live daily bucket) can also show a companion bucket's
+    # stats (e.g. the 4h paper research bucket, which writes a separate DB).
+    # Each entry is "Label=sqlite:///path/to.db". Read-only; failures degrade to a
+    # "(unavailable)" note rather than breaking the report.
+    extra_report_dbs: list[str] = Field(default_factory=list)
 
 
 class AppConfig(BaseModel):

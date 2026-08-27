@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from tradingbot.analysis.db_stats import render_db_stats
+from tradingbot.analysis.db_stats import render_db_stats, render_multi_db_stats
 from tradingbot.store.models import DecisionRecord, TradeRecord
 
 NOW = datetime(2026, 8, 9, 12, 0, tzinfo=timezone.utc)
@@ -25,6 +25,18 @@ def test_empty_db_reports_no_data() -> None:
     out = render_db_stats([], [])
     assert "fills: none yet" in out
     assert "decisions logged: 0" in out
+
+
+def test_multi_db_stats_labels_each_bucket() -> None:
+    daily = [_t("BTC/USDT", True), _t("BTC/USDT", False, pnl=3.0)]
+    out = render_multi_db_stats(
+        [("DAILY (live)", daily, []), ("4h PAPER", [], [])], quote="USDT"
+    )
+    assert "━━ DAILY (live) ━━" in out
+    assert "━━ 4h PAPER ━━" in out
+    # each bucket renders its own body; the empty 4h bucket shows the no-data line
+    assert "fills: none yet" in out
+    assert out.index("DAILY (live)") < out.index("4h PAPER")  # order preserved
 
 
 def test_win_rate_and_net_of_fees() -> None:

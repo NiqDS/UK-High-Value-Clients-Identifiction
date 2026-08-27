@@ -773,12 +773,33 @@ def _build_runner(settings: Settings):
         manager = ApprovalManager(_LazyNotifier(bot_holder), cfg.telegram.approval_timeout_seconds)
 
         async def report_provider():
-            # /report -> full db-stats performance summary (runs the sync DB read
-            # off the event loop so a query never blocks the bot).
-            from .analysis.db_stats import render_db_stats
-            return await asyncio.to_thread(
-                lambda: render_db_stats(trade_log.all(), decision_log.all(),
-                                        cfg.exchange.quote_currency))
+            # /report -> full db-stats performance summary (runs the sync DB reads
+            # off the event loop so a query never blocks the bot). Includes this
+            # bucket plus any reporting.extra_report_dbs (e.g. the 4h paper bucket,
+            # which writes a separate DB) — each read-only, failures degrade to a
+            # "(unavailable)" note rather than breaking the report.
+            from .analysis.db_stats import render_multi_db_stats
+            from .store import DecisionLog, TradeLog, make_session_factory
+            quote = cfg.exchange.quote_currency
+            own_label = f"{cfg.telegram.label or 'THIS'} (live)" if not cfg.app.dry_run \
+                else f"{cfg.telegram.label or 'THIS'} (paper)"
+
+            def _build() -> str:
+                sections = [(own_label, trade_log.all(), decision_log.all())]
+                for spec in cfg.reporting.extra_report_dbs:
+                    label, _, url = spec.partition("=")
+                    label, url = label.strip(), url.strip()
+                    if not url:
+                        continue
+                    try:
+                        sf2 = make_session_factory(url)
+                        sections.append(
+                            (label, TradeLog(sf2).all(), DecisionLog(sf2).all()))
+                    except Exception:
+                        sections.append((f"{label} (unavailable)", [], []))
+                return render_multi_db_stats(sections, quote)
+
+            return await asyncio.to_thread(_build)
 
         bot = TelegramApprovalBot(token, cfg, manager, controls, status,
                                   report_provider=report_provider)

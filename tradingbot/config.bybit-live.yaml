@@ -170,6 +170,10 @@ reporting:
   monthly_day: 1
   monthly_hour_utc: 8
   email_enabled: false
+  # /report also appends the 4h paper bucket's stats (it writes a SEPARATE DB).
+  # Read-only; if the file is missing/locked the section shows "(unavailable)".
+  extra_report_dbs:
+    - "4h PAPER=sqlite:///data/tradingbot_4h_paper.db"
 
 # --- App / runtime ---------------------------------------------------------
 app:

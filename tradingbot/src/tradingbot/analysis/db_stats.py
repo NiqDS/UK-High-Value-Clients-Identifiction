@@ -23,6 +23,23 @@ def _fmt_pct(n: int, d: int) -> str:
     return f"{(n / d * 100.0):.0f}%" if d else "-"
 
 
+def render_multi_db_stats(
+    sections: list[tuple[str, list[TradeRecord], list[DecisionRecord]]],
+    quote: str = "USDT",
+) -> str:
+    """Render several labelled buckets into one /report body.
+
+    ``sections`` is a list of ``(label, trades, decisions)``. Each is rendered
+    with :func:`render_db_stats` under a clear ``━━ LABEL ━━`` header so the live
+    daily bucket and the 4h paper bucket read as distinct blocks in one message.
+    """
+    blocks: list[str] = []
+    for label, trades, decisions in sections:
+        body = render_db_stats(trades, decisions, quote)
+        blocks.append(f"━━ {label} ━━\n{body}")
+    return "\n\n".join(blocks)
+
+
 def render_db_stats(
     trades: list[TradeRecord], decisions: list[DecisionRecord], quote: str = "USDT",
 ) -> str:
