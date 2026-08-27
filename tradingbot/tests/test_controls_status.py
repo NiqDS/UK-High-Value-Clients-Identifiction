@@ -134,3 +134,20 @@ async def test_status_uses_balance_provider() -> None:
     text = await reporter.build(NOW)
     assert "equity: 5000.00" in text
     assert "free: 4200.00" in text
+
+
+async def test_status_survives_a_hanging_balance_provider() -> None:
+    # A wedged exchange call must NOT stall /status: it should time out fast and
+    # degrade to "balance: unavailable", still returning the rest of the report.
+    import asyncio
+
+    async def hangs() -> tuple[float, float]:
+        await asyncio.sleep(60)  # never resolves within the test
+        return (1.0, 1.0)
+
+    reporter = StatusReporter(
+        Config(), InMemoryRiskStateStore(), balance_provider=hangs, balance_timeout_s=0.05
+    )
+    text = await asyncio.wait_for(reporter.build(NOW), timeout=5.0)
+    assert "balance: unavailable" in text
+    assert "trading enabled: True" in text  # rest of the report is intact

@@ -3,6 +3,7 @@ counters, event-risk window, kill-switch state)."""
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from typing import Awaitable, Callable
 
@@ -23,12 +24,14 @@ class StatusReporter:
         kill_switch: KillSwitch | None = None,
         event_module: EventRiskModule | None = None,
         balance_provider: BalanceProvider | None = None,
+        balance_timeout_s: float = 10.0,
     ) -> None:
         self.config = config
         self.store = store
         self.kill_switch = kill_switch
         self.event_module = event_module
         self.balance_provider = balance_provider
+        self.balance_timeout_s = balance_timeout_s
 
     async def build(self, now: datetime | None = None) -> str:
         now = now or datetime.now(timezone.utc)
@@ -42,10 +45,16 @@ class StatusReporter:
         lines.append(f"dry-run: {self.config.app.dry_run}")
 
         if self.balance_provider is not None:
+            # HARD-BOUND the live balance fetch. It's the only field that calls
+            # out to the exchange, and a hung fetch (e.g. the box swap-thrashing)
+            # must never stall the whole /status reply — that's how a status ends
+            # up "stuck" with no answer. On timeout OR error, degrade gracefully.
             try:
-                equity, free = await self.balance_provider()
+                equity, free = await asyncio.wait_for(
+                    self.balance_provider(), timeout=self.balance_timeout_s
+                )
                 lines.append(f"equity: {equity:.2f} {quote}  free: {free:.2f} {quote}")
-            except Exception:
+            except (Exception, asyncio.TimeoutError):
                 lines.append("balance: unavailable")
         lines.append(
             f"floor: {self.config.risk.floor_quote:.2f} "
