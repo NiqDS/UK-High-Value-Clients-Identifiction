@@ -104,13 +104,24 @@ events:
   calendar_csv: ""
   include_halvings: true
 
-# --- Kill switch: intraday-tuned; on DAILY bars it observes ~30 daily candles.
-# Widened so normal big trend days (the edge) don't halt it. REVIEW after Step 1.
+# --- Kill switch: DISABLED for the live daily bucket (reviewed 2026-08-27). -----
+# Rationale: this is a long-only breakout strategy acting on CLOSED DAILY bars.
+#   * A volatility halt only pauses NEW ENTRIES; it cannot react intraday, so on a
+#     closed-bar strategy it adds no protection the strategy doesn't already have.
+#   * Entries fire on a new 50-day HIGH — usually a big up-day — which is exactly
+#     the high-velocity day the kill-switch would trip on. It could therefore VETO
+#     the fat-tail breakouts that ARE the validated edge.
+#   * The only entries a velocity halt would block are during violent DOWN moves,
+#     which never create a new high anyway — so the long-only strategy wouldn't
+#     enter then regardless. Net effect on the edge: subtractive only.
+# The real risk layer remains fully in force: max_daily_loss_quote circuit breaker,
+# floor, sleeve/notional caps, the Donchian channel exit, and the macro-event
+# pauses. (The 4h paper bucket keeps its kill-switch — intraday bars can benefit.)
 kill_switch:
-  enabled: true
+  enabled: false
   rolling_window_minutes: 30
-  price_velocity_ratio: 5.0        # latest move >= 5x the median recent move
-  volume_spike_ratio: 8.0          # latest volume >= 8x the median recent volume
+  price_velocity_ratio: 5.0
+  volume_spike_ratio: 8.0
   cooldown_minutes: 1440
   pull_resting_orders: true
 

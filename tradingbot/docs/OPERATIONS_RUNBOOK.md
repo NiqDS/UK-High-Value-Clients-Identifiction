@@ -17,7 +17,7 @@ _Last updated: 2026-08-27._
 | **Live daily bot** | The real-money 7-coin daily Donchian breakout basket. | systemd service `tradingbot`, config `config.bybit-live.yaml` |
 | **4h research bucket** | Paper-only 4h experiment feeding the learning loop. **No real money, ever.** | systemd service `tradingbot-4h`, config `config.bybit-4h-paper.yaml` — currently **disabled** to save RAM |
 | **Daily paper bucket** | Pre-launch dress rehearsal (paper). Superseded by the live service. | config `config.bybit-daily-paper.yaml` (not currently installed as a service) |
-| **Host** | AWS Lightsail, London (eu-west-2), Ubuntu 24.04, **512 MB RAM** + 2 GB swap, static IP. | Lightsail console (browser SSH) |
+| **Host** | AWS Lightsail, London (eu-west-2), Ubuntu 24.04, **1 GB RAM** + 2 GB swap, static IP. Migrated from the original 512 MB box on 2026-08-27 (512 MB could not reliably start the bot — ccxt import thrashed swap). | Lightsail console (browser SSH) |
 | **Exchange** | Bybit **mainnet spot**, USDT-quoted. | — |
 
 **Capital:** ~206 USDT, split into 7 equal ~27-USDT sleeves. Floor 10 + buffer 5
@@ -106,7 +106,8 @@ in the `/status` Telegram reply. Silence ≠ broken.
 | `/status` **hangs**, no reply | Balance fetch to Bybit stalled; before the fix it had no timeout. | Fixed in code (10 s bound → degrades to `balance: unavailable`). If it still hangs, the **box is out of RAM** — reboot / resize. |
 | `/status` shows `balance: unavailable` (occasionally) | One transient balance-fetch miss. | Ignore a one-off. Worry only if it **persists** across many polls (then: RAM or Bybit outage). |
 | Service `active` but journald **totally silent**, `/status` dead | (a) logs were block-buffered [fixed: `PYTHONUNBUFFERED=1`]; and/or (b) startup stalled in ccxt import under swap. | Reboot to clear swap; run **one** service on the 512 MB box; resize to 1 GB for two. |
-| Box **freezes / needs reboot** | Two Python services (~277 MB each) on a 512 MB box → swap thrash → unresponsive. | Park 4h (`sudo systemctl disable --now tradingbot-4h`) **or** resize to 1 GB. Reboot clears accumulated swap. |
+| Box **freezes / needs reboot** | Swap thrash from too little RAM (was the 512 MB box). | Now on 1 GB — should not recur. If it does: reboot to clear swap, and check nothing extra is resident. |
+| Kill-switch **flapping** at startup (`TRIGGERED … resuming` per coin) | Harmless historical replay while priming the window; it re-runs ~30 daily bars in ms. **Now disabled on the live daily bucket anyway.** | None. On the 4h bucket it's expected priming noise; settles once on live bars. |
 | `telegram.error.TimedOut` at startup | Telegram unreachable at that moment. **Old code let this stop trading.** | Fixed: Telegram start is now non-fatal + timeout-bounded — the trading loop runs regardless. |
 | Telegram `Conflict` / 409 | Two pollers on one token. | Only the live bucket may poll (`commands_enabled: true`); 4h stays alerts-only. |
 | Bybit `Invalid Api-Key` / `-2008` | A Bybit key sent to the wrong venue, or IP not whitelisted, or wrong wallet. | Verify key venue = Bybit, IP whitelist = current static IP, funds in Spot/Unified. |
@@ -159,14 +160,19 @@ On-host edits that are **not** in the repo (re-apply after a fresh clone):
 
 ---
 
-## 7. Memory reality (the 512 MB box)
+## 7. Memory reality
 
-- One bot instance fully loaded ≈ **126 MB RAM**. The OS baseline ≈ 150–200 MB.
-  One instance fits comfortably; **two do not** and force heavy swap.
+- **512 MB was too small** even for one instance: the `ccxt` import spike on top
+  of the OS baseline blew past available RAM, fell into swap, and a clean start
+  could take *minutes* (or wedge entirely). Confirmed 2026-08-27.
+- **Now on 1 GB** (~909 Mi usable). One instance starts in ~15 s with ~370 MB
+  free and swap barely touched. The 4h bucket fits alongside the live daily here.
+- Migration path if RAM is ever tight again: Lightsail **snapshot → new instance
+  on a bigger plan → move the static IP → restart the bot → delete the old box**
+  (see §5-style steps in the change log / chat history). The static IP moving
+  with it means the **Bybit IP-whitelist stays valid** — no key changes.
 - Swap does **not** clear itself — after a bout of thrash, a **reboot** is the
   clean reset.
-- **To run the live daily + the 4h bucket together, resize to the 1 GB plan.**
-  Until then, run the live daily **solo** (4h disabled).
 
 ---
 
@@ -193,3 +199,14 @@ Record every operational change here (date — what — why).
   `/status` balance fetch bounded to 10 s; service made unbuffered
   (`PYTHONUNBUFFERED=1`) with `MemoryHigh/Max` caps. Parked the 4h bucket to
   relieve RAM pressure on the 512 MB host.
+- **2026-08-27 (later)** — **Migrated host 512 MB → 1 GB** (snapshot → new
+  instance → moved static IP → restarted → deleted old box). 512 MB couldn't
+  reliably start the bot. New instance private IP `ip-172-26-5-52`; static IP and
+  Bybit whitelist unchanged.
+- **2026-08-27 (later)** — **Disabled the volatility kill-switch on the live
+  daily bucket** (`kill_switch.enabled: false`). It can only subtract from a
+  long-only closed-daily-bar breakout edge (would veto big up-day breakouts) and
+  adds no intraday protection. Daily-loss breaker, floor, sleeve caps, Donchian
+  exit and event pauses remain. 4h paper bucket keeps its kill-switch.
+- **2026-08-27 (later)** — Re-enabled the **4h research bucket** on the 1 GB host
+  (`tradingbot-4h`), now that there's RAM headroom.
