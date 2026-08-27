@@ -1,0 +1,149 @@
+# =============================================================================
+# ACTIVE TEST config — Bybit mainnet, PAPER, INTRADAY (data-collection only)
+# -----------------------------------------------------------------------------
+# PURPOSE: generate a high volume of trades (good AND bad) to exercise the full
+# pipeline — signals, approval, fills, exits, the trade/decision logs, own-loss
+# writing, the weekly learning loop, and the reports. It polls every 10 min and
+# trades a SHORT intraday breakout so deals actually happen.
+#
+# >>> HONESTY WARNING <<<
+# This is the intraday regime our research RULED OUT (1m Donchian: 0/18 params
+# profitable). Expect MOSTLY LOSING trades from fees + noise. Use this data to
+# validate the PLUMBING, NOT to tune the real daily strategy. Do not copy any
+# parameter from here into config.bybit-live.yaml.
+#
+# Paper only (dry_run: true) — no real money. Separate DB so it never mixes with
+# real daily-strategy history.
+#   python -m tradingbot --config config.bybit-test-active.yaml run
+# =============================================================================
+
+exchange:
+  name: bybit
+  sandbox: false
+  quote_currency: USDT
+  symbols_allowlist:
+    - BTC/USDT
+    - ETH/USDT
+    - BNB/USDT
+    - ADA/USDT
+    - AVAX/USDT
+    - DOGE/USDT
+    - TRX/USDT
+  enable_rate_limit: true
+  request_timeout_ms: 20000
+  use_threaded_dns: true
+  options:
+    defaultType: spot
+
+risk:
+  floor_quote: 10.0
+  floor_buffer_quote: 5.0
+  min_notional_per_trade_quote: 5.0
+  max_notional_per_trade_quote: 26.0
+  max_notional_per_trade_pct_equity: 15.0
+  per_trade_risk_pct: 15.0
+  max_open_positions: 7
+  max_concurrent_open_orders: 8
+  max_trades_per_day: 200          # HIGH — intraday testing generates many trades
+  max_daily_traded_notional_quote: 5000.0
+  max_daily_loss_quote: 60.0       # still halts on a bad paper day (tests the breaker)
+  daily_reset_utc_hour: 0
+
+fees:
+  maker_fee_pct: 0.10
+  taker_fee_pct: 0.10
+  pull_fee_tiers_from_exchange: true
+  round_trip_fee_safety_margin_pct: 0.20
+  maker_first: true
+  allow_taker_fallback: true
+  maker_offset_pct: 0.05
+  max_spread_pct: 0.30
+  max_slippage_pct: 0.20
+  require_take_profit: false
+
+# --- INTRADAY breakout so trades actually fire (NOT the validated daily edge) -
+strategy:
+  name: donchian_breakout
+  timeframe: 15m                   # 15-minute bars (vs 1d in production)
+  ohlcv_limit: 120
+  target_notional_quote: 23.0
+  take_profit_pct: 1.5
+  stop_loss_pct: 1.0
+  vwap_filter_enabled: false
+  donchian_entry_period: 20        # 20 x 15m = ~5h breakout -> frequent signals
+  donchian_exit_period: 10
+  trend_filter_enabled: false
+  signal_on_closed_bar: false      # react to the LIVE price each poll (current state)
+
+events:
+  enabled: true
+  timezone: UTC
+  pre_event_window_minutes: 60
+  post_event_window_minutes: 30
+  pause_entries: true
+  reduce_size_pct: 50.0
+  widen_maker_offset_pct: 0.10
+  tighten_stops: true
+  calendar: []
+  calendar_csv: ""
+  include_halvings: true
+
+# kill switch on 15m data reacts to intraday moves — fine for a paper test
+kill_switch:
+  enabled: true
+  rolling_window_minutes: 30       # count-based: keeps 30 recent bars (~7.5h at 15m)
+  # 15m-TUNED. Intraday crypto is far burstier than daily bars — routine 15m
+  # candles hit 12-19x median volume and 6x median move, and breakout entries
+  # COINCIDE with those spikes. Daily-config thresholds (5x / 8x) would pause
+  # exactly when the strategy wants to enter, starving the data-collection DB.
+  # These sit above routine intraday noise so only genuine shocks pause entries.
+  price_velocity_ratio: 10.0       # latest move >= 10x the median recent move
+  volume_spike_ratio: 25.0         # latest volume >= 25x the median recent volume
+  cooldown_minutes: 60
+  pull_resting_orders: true
+
+regime:
+  enabled: false
+funding:
+  enabled: false
+mvrv:
+  enabled: false
+
+learning:
+  enabled: true
+  bad_trades_dir: bad_trades
+  weekly: true
+  min_trades_per_bucket: 5
+  write_own_losers: true
+
+telegram:
+  enabled: true
+  require_approval: false          # AUTO-APPROVE + alerts (systematic posture — no per-trade tap)
+  trade_alerts: true               # message on every buy & sell (time, amount, P&L, DB id)
+  approval_threshold_quote: 0.0
+  approval_timeout_seconds: 300
+  allowed_chat_ids: []             # EMPTY on this RU-cloud host — Telegram API is blocked here,
+                                   # so entries auto-approve. On a Telegram-reachable host (or the
+                                   # Mac with `run --chat-id 460430602`) you'll get live alerts.
+
+reporting:
+  weekly_enabled: true
+  weekly_day: 0
+  weekly_hour_utc: 8
+  email_enabled: false
+
+app:
+  dry_run: true                    # PAPER — no real orders
+  paper_equity: 180.0
+  trading_enabled: true
+  log_level: INFO
+  log_json: false
+  log_file: "data/test_active.log"   # durable rotating log for the unattended run
+  log_file_max_bytes: 5000000        # ~5 MB/file
+  log_file_backups: 5                # keep 5 rotations (~25 MB total)
+  db_url: "sqlite:///data/tradingbot_test_active.db"   # SEPARATE from production
+  heartbeat_interval_seconds: 600  # poll every 10 minutes
+  max_api_latency_ms: 3000
+  max_consecutive_failures: 3
+  health_recovery_samples: 3
+  cancel_orders_on_suspend: true

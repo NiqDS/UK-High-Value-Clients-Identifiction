@@ -1,0 +1,79 @@
+"""Donchian-channel breakout — the trend-following thesis.
+
+Research on this platform showed mean-reversion is positive on mean-reverting
+equity indices (SPY/QQQ) but loses badly on BTC, because **BTC trends**. This
+strategy is the trend-following counterpart: it goes long when price breaks out
+above the prior N-bar high (momentum/continuation) and exits when price breaks
+below the prior M-bar low (the channel stop). Long-only, no fixed take-profit —
+it rides the trend and lets the lower channel end it. Classic Turtle logic.
+
+Plugs into the same backtest / compare / walkforward / robustness harness.
+"""
+
+from __future__ import annotations
+
+from ..config import StrategyConfig
+from ..domain import OrderIntent, OrderType, Side
+from .base import MarketData, Strategy
+
+
+class DonchianBreakoutStrategy(Strategy):
+    name = "donchian_breakout"
+
+    def __init__(self, config: StrategyConfig) -> None:
+        self.config = config
+
+    def generate_signals(self, market: MarketData) -> list[OrderIntent]:
+        cfg = self.config
+        candles = market.candles
+        n_entry, n_exit = cfg.donchian_entry_period, cfg.donchian_exit_period
+        if len(candles) < max(n_entry, n_exit) + 1:
+            return []
+        # Signal price: the live tick by default; the last CLOSED bar's close when
+        # signal_on_closed_bar is set (parity with the backtest, which decides on
+        # bar closes — the live runner also drops the still-forming candle).
+        price = candles[-1].close if cfg.signal_on_closed_bar else market.last_price
+        if not price or price <= 0:
+            return []
+
+        # Channels from the PRIOR bars only (exclude the current bar -> no look-ahead).
+        prior_high = max(c.high for c in candles[-n_entry - 1:-1])
+        prior_low = min(c.low for c in candles[-n_exit - 1:-1])
+        meta = {"donchian_high": prior_high, "donchian_low": prior_low}
+
+        if market.holding:
+            # Exit when price breaks below the lower channel (trend over).
+            if price < prior_low:
+                return [OrderIntent(
+                    symbol=market.symbol, side=Side.SELL,
+                    amount=cfg.target_notional_quote / price, order_type=OrderType.MARKET,
+                    price=price, is_entry=False, reason="donchian channel exit", metadata=meta)]
+            return []
+
+        # Regime gate (optional): only take longs when the slow trend agrees, i.e.
+        # price is above its `trend_period`-bar SMA. This suppresses the bear-market
+        # relief-rally false breakouts that whipsaw a long-only trend system; exits
+        # are never gated (you can always leave). No look-ahead — SMA uses closes
+        # up to and including the current bar only.
+        if cfg.trend_filter_enabled:
+            closes = [c.close for c in candles]
+            if len(closes) < cfg.trend_period:
+                return []  # not enough history to know the regime -> stand aside
+            trend_sma = sum(closes[-cfg.trend_period:]) / cfg.trend_period
+            if price <= trend_sma:
+                return []
+            meta["trend_sma"] = trend_sma
+
+        # Entry: breakout above the upper channel. Protective stop at the lower
+        # channel (the natural trend-following stop); no take-profit — ride it.
+        # MARKET, not a passive limit: a breakout entry wants immediacy — a maker
+        # bid parked below a rising market rests unfilled (and un-tracked resting
+        # orders are exactly the failure mode the live review flagged). Requires
+        # fees.allow_taker_fallback in live configs.
+        if price > prior_high:
+            return [OrderIntent(
+                symbol=market.symbol, side=Side.BUY,
+                amount=cfg.target_notional_quote / price, order_type=OrderType.MARKET,
+                price=price, stop_price=min(prior_low, price * (1 - cfg.stop_loss_pct / 100.0)),
+                is_entry=True, reason="donchian breakout buy", metadata=meta)]
+        return []
