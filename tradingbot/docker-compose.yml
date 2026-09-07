@@ -1,0 +1,18 @@
+# Run the bot as a long-lived service.
+#   1. cp .env.example .env   and fill in secrets (trade-only key, Telegram, SMTP)
+#   2. edit config.yaml       (keep dry_run + sandbox true until validated)
+#   3. docker compose up -d --build
+#   4. docker compose logs -f
+services:
+  tradingbot:
+    build: .
+    image: tradingbot:latest
+    container_name: tradingbot
+    env_file: .env                       # secrets only (git-ignored)
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro # non-secret config (live-editable)
+      - ./data:/app/data                  # SQLite trade log + counters (persisted)
+      - ./reports:/app/reports            # weekly report files (persisted)
+    restart: unless-stopped
+    stop_grace_period: 30s                # allow graceful shutdown (SIGTERM)
+    # Telegram lets you control it remotely; no inbound ports are required.

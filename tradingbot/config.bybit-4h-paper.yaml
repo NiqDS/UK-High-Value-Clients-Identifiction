@@ -1,0 +1,148 @@
+# =============================================================================
+# 4h RESEARCH PAPER BUCKET — Bybit MAINNET data, SIMULATED fills (dry_run).
+# -----------------------------------------------------------------------------
+# A SECOND, paper-only bucket that runs the breakout strategy on the 4h
+# timeframe (more trades than the daily) purely to COLLECT LIVE DATA for the
+# learning loop and to see whether the 4h edge holds forward. TEST ONLY — this
+# never gets real money until it earns it out-of-sample.
+#
+# >>> DO NOT set app.dry_run = false in this file. <<<
+# The 4h is an unvalidated-forward experiment; real money is the daily bucket
+# (config.bybit-live.yaml) only.
+#
+# Telegram: alerts-only + a "4h" headline tag. It shares the SAME bot token and
+# chat as the daily bucket but does NOT poll for /commands (commands_enabled
+# false) — only ONE service may poll a token, and that's the daily bucket. So
+# 4h buy/sell alerts arrive tagged "[4h]" alongside the daily's "[DAILY]".
+#
+# Run it as a second service:
+#   bash deploy/install-service.sh config.bybit-4h-paper.yaml 4h   # -> tradingbot-4h
+# =============================================================================
+
+exchange:
+  name: bybit
+  sandbox: false
+  quote_currency: USDT
+  symbols_allowlist:
+    - BTC/USDT
+    - ETH/USDT
+    - BNB/USDT
+    - ADA/USDT
+    - AVAX/USDT
+    - DOGE/USDT
+    - TRX/USDT
+  enable_rate_limit: true
+  request_timeout_ms: 20000
+  use_threaded_dns: true
+  options:
+    defaultType: spot
+
+risk:
+  floor_quote: 10.0
+  floor_buffer_quote: 5.0
+  min_notional_per_trade_quote: 5.0
+  max_notional_per_trade_quote: 26.0
+  max_notional_per_trade_pct_equity: 15.0
+  per_trade_risk_pct: 15.0
+  max_open_positions: 7
+  max_concurrent_open_orders: 8
+  max_trades_per_day: 40             # higher than daily — 4h fires more; don't cap the data
+  max_daily_traded_notional_quote: 400.0
+  max_daily_loss_quote: 25.0
+  daily_reset_utc_hour: 0
+
+fees:
+  maker_fee_pct: 0.10
+  taker_fee_pct: 0.10
+  pull_fee_tiers_from_exchange: true
+  round_trip_fee_safety_margin_pct: 0.20
+  maker_first: true
+  allow_taker_fallback: true
+  maker_offset_pct: 0.05
+  max_spread_pct: 0.30
+  max_slippage_pct: 0.20
+  require_take_profit: false
+
+# Breakout on the 4h timeframe (periods in BARS — same 50/15 the 4h backtest used).
+strategy:
+  name: donchian_breakout
+  timeframe: 4h
+  ohlcv_limit: 200                   # >= entry+exit period with buffer
+  target_notional_quote: 23.0
+  take_profit_pct: 1.5
+  stop_loss_pct: 1.0
+  vwap_filter_enabled: false
+  donchian_entry_period: 50
+  donchian_exit_period: 15
+  trend_filter_enabled: false
+  signal_on_closed_bar: true         # decide on the last CLOSED 4h bar
+
+events:
+  enabled: true
+  timezone: UTC
+  pre_event_window_minutes: 60
+  post_event_window_minutes: 30
+  pause_entries: true
+  reduce_size_pct: 50.0
+  widen_maker_offset_pct: 0.10
+  tighten_stops: true
+  calendar: []
+  calendar_csv: ""
+  include_halvings: true
+
+kill_switch:
+  enabled: true
+  rolling_window_minutes: 30
+  price_velocity_ratio: 5.0
+  volume_spike_ratio: 8.0
+  cooldown_minutes: 240              # 4h cooldown (vs 1440 daily)
+  pull_resting_orders: true
+
+regime:
+  enabled: false
+funding:
+  enabled: false
+mvrv:
+  enabled: false
+
+learning:
+  enabled: true
+  bad_trades_dir: bad_trades
+  weekly: true
+  min_trades_per_bucket: 5
+  write_own_losers: true
+
+telegram:
+  enabled: true
+  require_approval: false            # auto-approve (paper research; no manual taps)
+  trade_alerts: true                 # buy/sell alerts, tagged "[4h]"
+  label: "4h"                        # headline tag
+  commands_enabled: false            # ALERTS-ONLY — the daily bucket owns the poller
+  approval_threshold_quote: 0.0
+  approval_timeout_seconds: 300
+  allowed_chat_ids: []               # add [460430602] on the host (same chat as the daily)
+
+reporting:
+  weekly_enabled: true
+  weekly_day: 0
+  weekly_hour_utc: 8
+  monthly_enabled: true
+  monthly_day: 1
+  monthly_hour_utc: 8
+  email_enabled: false
+
+app:
+  dry_run: true                      # PAPER — locked. Never flip; 4h is unvalidated forward.
+  paper_equity: 180.0
+  trading_enabled: true
+  log_level: INFO
+  log_json: false
+  log_file: "data/4h_paper.log"
+  log_file_max_bytes: 5000000
+  log_file_backups: 5
+  db_url: "sqlite:///data/tradingbot_4h_paper.db"   # SEPARATE bucket DB
+  heartbeat_interval_seconds: 900    # 15-min poll — catches 4h closes promptly
+  max_api_latency_ms: 3000
+  max_consecutive_failures: 3
+  health_recovery_samples: 3
+  cancel_orders_on_suspend: true

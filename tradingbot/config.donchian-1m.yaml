@@ -1,0 +1,23 @@
+# 1-minute Donchian trend preset — to compare intraday trend-following against the
+# DAILY BTC edge (which was positive OOS across 18/18 param settings).
+#
+# Sections not listed here inherit safe defaults (paper + sandbox), so this is for
+# experimentation. Use it for a backtest:
+#   python3 -m tradingbot --config config.donchian-1m.yaml compare \
+#       --source csv --csv data/btc_1m.csv --oos 0.4 --fee 0.6 --slippage 0.05
+# or a paper run (paper + sandbox by default — no real funds):
+#   python3 -m tradingbot --config config.donchian-1m.yaml paper-run
+#
+# NOTE: on 1-minute bars the per-trade move is tiny vs fees (0.6%/side here), so
+# this is expected to be far weaker than the daily edge — that contrast is the test.
+
+strategy:
+  name: donchian_breakout
+  timeframe: 1m
+  ohlcv_limit: 120                  # must exceed donchian_entry_period + 1
+  take_profit_pct: 1.5
+  stop_loss_pct: 1.0
+  target_notional_quote: 40.0
+  vwap_filter_enabled: false
+  donchian_entry_period: 50         # 50-minute breakout (vs 50 DAYS on the daily preset)
+  donchian_exit_period: 15

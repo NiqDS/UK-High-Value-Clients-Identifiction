@@ -1,0 +1,126 @@
+"""Fee-aware order execution: maker-first pricing + slippage guard.
+
+Runs AFTER the risk engine has approved an intent. Responsibilities:
+  - choose maker vs taker per policy (maker-first; taker only when allowed);
+  - compute a passive maker limit price (offset away from mid so it rests as a
+    maker), or a taker price that crosses;
+  - re-check slippage against the decision price (the market may have moved
+    since the risk decision) and skip if it exceeds the cap;
+  - hand the order to the broker and return the result.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+
+from ..config import Config
+from ..domain import OrderIntent, OrderType, Side
+from ..exchange.models import Ticker
+from ..risk.engine import RiskDecision
+from .broker import Broker
+from .models import ExecStatus, ExecutionResult, LiquidityRole, Order
+
+logger = logging.getLogger(__name__)
+
+
+class Executor:
+    def __init__(self, config: Config, broker: Broker) -> None:
+        self.config = config
+        self.broker = broker
+
+    def _maker_price(
+        self, side: Side, best_bid: float, best_ask: float, extra_offset_pct: float = 0.0
+    ) -> float:
+        """Passive limit price that rests as a maker (offset away from mid).
+
+        ``extra_offset_pct`` widens the offset during event-risk windows.
+        """
+        offset = (self.config.fees.maker_offset_pct + extra_offset_pct) / 100.0
+        if side == Side.BUY:
+            return best_bid * (1 - offset)
+        return best_ask * (1 + offset)
+
+    def _build_order(
+        self, intent: OrderIntent, decision: RiskDecision, ticker: Ticker,
+        extra_maker_offset_pct: float = 0.0,
+    ) -> ExecutionResult | Order:
+        fees = self.config.fees
+        best_bid, best_ask = ticker.bid, ticker.ask
+        if not best_bid or not best_ask:
+            return ExecutionResult(ExecStatus.REJECTED, None, reason="no bid/ask for execution")
+
+        client_order_id = intent.client_order_id or f"tb-{uuid.uuid4().hex[:16]}"
+        reference = decision.est_price or (best_ask if intent.side == Side.BUY else best_bid)
+
+        is_market = intent.order_type is OrderType.MARKET
+        emergency = bool(intent.metadata.get("emergency"))
+        # Emergency exits cross the spread to get out now, regardless of maker policy.
+        use_maker = fees.maker_first and not is_market and not emergency
+
+        if use_maker:
+            role = LiquidityRole.MAKER
+            price = self._maker_price(intent.side, best_bid, best_ask, extra_maker_offset_pct)
+            order_type = OrderType.LIMIT
+        else:
+            # taker path — allowed when configured, and ALWAYS for protective
+            # flow: emergencies and any exit (an exit reduces risk; blocking it
+            # on fee policy would strand a live position).
+            protective = emergency or not intent.is_entry
+            if not fees.allow_taker_fallback and not protective:
+                return ExecutionResult(
+                    ExecStatus.REJECTED, None,
+                    reason="taker order required but allow_taker_fallback is false",
+                )
+            role = LiquidityRole.TAKER
+            price = best_ask if intent.side == Side.BUY else best_bid
+            order_type = OrderType.MARKET if is_market else intent.order_type
+            # A taker order's fill IS the live book price — measuring "slippage"
+            # against the (possibly closed-bar, hours-old) signal price would skip
+            # exactly the fast breakouts the strategy exists to catch. Backtest
+            # parity fills at next-bar open regardless of the gap; the spread gate
+            # still protects against a disorderly book.
+            reference = price
+
+        return Order(
+            client_order_id=client_order_id,
+            symbol=intent.symbol,
+            side=intent.side,
+            amount=abs(intent.amount),
+            order_type=order_type,
+            role=role,
+            price=price,
+            reference_price=reference,
+        )
+
+    def _slippage_ok(self, order: Order) -> bool:
+        cap = self.config.fees.max_slippage_pct
+        if cap <= 0 or order.reference_price <= 0 or order.price is None:
+            return True
+        dev = abs(order.price - order.reference_price) / order.reference_price * 100.0
+        return dev <= cap
+
+    async def execute(
+        self, intent: OrderIntent, decision: RiskDecision, ticker: Ticker,
+        extra_maker_offset_pct: float = 0.0,
+    ) -> ExecutionResult:
+        built = self._build_order(intent, decision, ticker, extra_maker_offset_pct)
+        if isinstance(built, ExecutionResult):  # rejected during build
+            logger.info("Execution rejected: %s", built.reason)
+            return built
+        order = built
+
+        # Emergency exits must not be blocked by the slippage guard — getting out
+        # now matters more than the fill price.
+        if bool(intent.metadata.get("emergency")):
+            return await self.broker.place_order(order)
+
+        if not self._slippage_ok(order):
+            dev = abs(order.price - order.reference_price) / order.reference_price * 100.0
+            logger.info("Execution skipped: slippage %.3f%% > cap", dev)
+            return ExecutionResult(
+                ExecStatus.SKIPPED, order,
+                reason=f"slippage {dev:.3f}% exceeds cap {self.config.fees.max_slippage_pct}%",
+            )
+
+        return await self.broker.place_order(order)

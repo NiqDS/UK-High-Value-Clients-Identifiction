@@ -1,0 +1,191 @@
+# =============================================================================
+# LIVE config — Bybit MAINNET / 7-coin daily Donchian trend basket (USDT)
+# -----------------------------------------------------------------------------
+# Capital limit: ~206 USDT, split into 7 equal ~27-USDT sleeves.
+#
+# >>> TWO-STEP CUTOVER — read this before running. <<<
+#
+# STEP 1 (shipped state): app.dry_run = TRUE
+#   Real Bybit MAINNET endpoints + your real READ key, but SIMULATED fills
+#   (PaperBroker) — NO real orders, NO money at risk. Run it first and confirm a
+#   clean session (markets load, data flows, strategy/risk behave, no errors):
+#       python3 -m tradingbot --config config.bybit-live.yaml run
+#   NOTE: paper mode does NOT exercise real order PLACEMENT — it validates
+#   everything up to the broker. Get a clean run here before Step 2.
+#
+# STEP 2 (go truly live — REAL MONEY): set app.dry_run = FALSE below.
+#   Now the LiveBroker places REAL orders with REAL funds. Only do this after a
+#   clean Step-1 run AND with a TRADE+READ key that has WITHDRAWALS DISABLED.
+#
+# Funding: deposit/convert ~206 USDT on Bybit. USDT-quoted (USD-pegged) — a small
+# GBP/USD FX layer vs holding GBP.
+# =============================================================================
+
+exchange:
+  name: bybit
+  sandbox: false             # MAINNET — real exchange
+  quote_currency: USDT
+  symbols_allowlist:
+    - BTC/USDT
+    - ETH/USDT
+    - BNB/USDT
+    - ADA/USDT
+    - AVAX/USDT
+    - DOGE/USDT
+    - TRX/USDT
+  enable_rate_limit: true
+  request_timeout_ms: 20000
+  use_threaded_dns: true
+  options:
+    defaultType: spot        # SPOT only (UK = no derivatives)
+
+# --- Hard risk layer. ~206 USDT across 7 equal ~27-USDT sleeves. ------------
+# Absolute notional caps define the sleeve; 7 x 27 = 189 deployed + 15 floor/buffer
+# leaves ~2 headroom. Keep this account funded with ~206 USDT and nothing more —
+# the bot can only ever touch what's in this account.
+risk:
+  floor_quote: 10.0                 # hard reserve; breach HALTS trading
+  floor_buffer_quote: 5.0
+  min_notional_per_trade_quote: 5.0    # verify Bybit's per-symbol spot minimum (~1-5 USDT)
+  max_notional_per_trade_quote: 30.0   # caps a sleeve (~27)
+  max_notional_per_trade_pct_equity: 15.0   # 15% of ~206 ≈ 31; absolute cap binds first
+  per_trade_risk_pct: 15.0          # non-binding BY DESIGN: the Donchian stop is the wide
+                                    # channel low (can sit 30-40% below entry) and the SLEEVE
+                                    # is the real per-coin risk bound — a tighter % here
+                                    # silently rejects exactly the fat-tail breakout entries
+                                    # that generated the validated backtest returns
+  max_open_positions: 7             # one sleeve per coin
+  max_concurrent_open_orders: 8
+  max_trades_per_day: 14
+  max_daily_traded_notional_quote: 206.0
+  max_daily_loss_quote: 28.0        # ~14% of the book — daily circuit breaker -> halt
+  daily_reset_utc_hour: 0
+
+# --- Fees: Bybit spot ~0.10% maker/taker (pull real tier once keyed). -------
+fees:
+  maker_fee_pct: 0.10
+  taker_fee_pct: 0.10
+  pull_fee_tiers_from_exchange: true
+  round_trip_fee_safety_margin_pct: 0.20
+  maker_first: true
+  allow_taker_fallback: true        # allow taking liquidity for breakout entry / guaranteed exit
+  maker_offset_pct: 0.05
+  max_spread_pct: 0.30
+  max_slippage_pct: 0.20
+  require_take_profit: false        # CRITICAL: trend rider has no TP (exits on the channel)
+
+# --- The validated strategy: daily Donchian breakout. ----------------------
+strategy:
+  name: donchian_breakout
+  timeframe: 1d
+  ohlcv_limit: 120
+  target_notional_quote: 27.0       # per-sleeve deployment (~206 USDT / 7, with buffer)
+  take_profit_pct: 1.5              # unused by donchian — kept valid for the loader
+  stop_loss_pct: 1.0
+  vwap_filter_enabled: false
+  donchian_entry_period: 50
+  donchian_exit_period: 15
+  trend_filter_enabled: false       # 200d-SMA gate RULED OUT (see RESEARCH_REPORT)
+  signal_on_closed_bar: true        # PARITY: decide on the last CLOSED daily bar, like the
+                                    # validated backtest — never on an intraday tick/wick
+                                    # (the runner drops the still-forming candle too)
+
+# --- Macro-event exposure windows. Pause entries, don't trade direction. ----
+events:
+  enabled: true
+  timezone: UTC
+  pre_event_window_minutes: 60
+  post_event_window_minutes: 30
+  pause_entries: true
+  reduce_size_pct: 50.0
+  widen_maker_offset_pct: 0.10
+  tighten_stops: true
+  calendar: []
+  calendar_csv: ""
+  include_halvings: true
+
+# --- Kill switch: DISABLED for the live daily bucket (reviewed 2026-08-27). -----
+# Rationale: this is a long-only breakout strategy acting on CLOSED DAILY bars.
+#   * A volatility halt only pauses NEW ENTRIES; it cannot react intraday, so on a
+#     closed-bar strategy it adds no protection the strategy doesn't already have.
+#   * Entries fire on a new 50-day HIGH — usually a big up-day — which is exactly
+#     the high-velocity day the kill-switch would trip on. It could therefore VETO
+#     the fat-tail breakouts that ARE the validated edge.
+#   * The only entries a velocity halt would block are during violent DOWN moves,
+#     which never create a new high anyway — so the long-only strategy wouldn't
+#     enter then regardless. Net effect on the edge: subtractive only.
+# The real risk layer remains fully in force: max_daily_loss_quote circuit breaker,
+# floor, sleeve/notional caps, the Donchian channel exit, and the macro-event
+# pauses. (The 4h paper bucket keeps its kill-switch — intraday bars can benefit.)
+kill_switch:
+  enabled: false
+  rolling_window_minutes: 30
+  price_velocity_ratio: 5.0
+  volume_spike_ratio: 8.0
+  cooldown_minutes: 1440
+  pull_resting_orders: true
+
+regime:
+  enabled: false
+funding:
+  enabled: false
+mvrv:
+  enabled: false
+
+# --- Weekly evidence-driven learning loop (advisory; never auto-applies) -----
+learning:
+  enabled: true
+  bad_trades_dir: bad_trades   # own losing trades + your uploaded external logs
+  weekly: true                 # assess on the weekly-report cadence
+  min_trades_per_bucket: 5     # don't draw conclusions below this (noise vs signal)
+  write_own_losers: true       # append own losing exits to the folder for the record
+
+# --- Telegram approval (see docs/TELEGRAM_SETUP.md for the 5-minute setup). --
+# Semantics (enforced in code):
+#   * approval_threshold_quote 0.0 => every ENTRY needs your approval tap.
+#     EXITS never need approval — they reduce risk and execute immediately.
+#   * PAPER (dry_run true) without Telegram: entries auto-approve (with a warning)
+#     so the paper run actually exercises the pipeline.
+#   * LIVE (dry_run false) without Telegram: the bot REFUSES TO START rather than
+#     silently deadlock every trade in PENDING_APPROVAL.
+telegram:
+  enabled: true
+  require_approval: false           # AUTO-APPROVE — the validated systematic posture: no manual
+                                    # tap per trade (human discretion degrades a proven edge and
+                                    # a missed tap can cost a concentrated winner). Alerts + kill
+                                    # switch stay on. Set true only for a short training-wheels period.
+  trade_alerts: true                # a Telegram message on every buy & sell (time, amount, P&L, DB id)
+  label: "DAILY"                    # headline tag so a 4h paper bucket's alerts are distinguishable
+  commands_enabled: true            # the live daily bucket owns the /commands poller
+  approval_threshold_quote: 0.0
+  approval_timeout_seconds: 300
+  allowed_chat_ids: []              # your numeric chat id, e.g. [460430602] — on a Telegram-reachable
+                                    # (UK/EU) host. Kept empty on the RU-cloud box (Telegram blocked).
+
+reporting:
+  weekly_enabled: true
+  weekly_day: 0
+  weekly_hour_utc: 8
+  monthly_enabled: true             # monthly deep review: performance + bad trades + missed ops
+  monthly_day: 1
+  monthly_hour_utc: 8
+  email_enabled: false
+  # /report also appends the 4h paper bucket's stats (it writes a SEPARATE DB).
+  # Read-only; if the file is missing/locked the section shows "(unavailable)".
+  extra_report_dbs:
+    - "4h PAPER=sqlite:///data/tradingbot_4h_paper.db"
+
+# --- App / runtime ---------------------------------------------------------
+app:
+  dry_run: true                     # STEP 1: paper on LIVE data (no real orders). Flip to
+                                    # FALSE for STEP 2 (REAL MONEY) after a clean Step-1 run.
+  paper_equity: 206.0               # sizes the Step-1 paper run if balance can't be read
+  trading_enabled: true
+  log_level: INFO
+  log_json: false
+  db_url: "sqlite:///data/tradingbot_bybit_live.db"
+  heartbeat_interval_seconds: 3600  # hourly poll — ample for a daily strategy
+  max_api_latency_ms: 3000
+  max_consecutive_failures: 3
+  health_recovery_samples: 3
+  cancel_orders_on_suspend: true

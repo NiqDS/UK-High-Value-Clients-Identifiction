@@ -1,0 +1,168 @@
+# =============================================================================
+# tradingbot configuration  (NON-SECRET values only — secrets live in .env)
+# -----------------------------------------------------------------------------
+# Every safety setting below defaults to its MOST CONSERVATIVE value.
+# Edit deliberately. Values are validated on load; nonsensical configs are
+# rejected (e.g. min notional > max notional, negative floors, etc.).
+# =============================================================================
+
+exchange:
+  name: coinbase            # any ccxt id; swappable (kraken, binance, okx, bitstamp...)
+  sandbox: true             # use the venue's testnet/sandbox endpoint — KEEP TRUE until proven
+  quote_currency: USD       # the currency the floor / notional limits are denominated in
+  symbols_allowlist:        # ONLY these pairs may ever be traded
+    - BTC/USD
+    - ETH/USD
+  enable_rate_limit: true   # respect ccxt's built-in rate limiter
+  request_timeout_ms: 20000
+
+# --- Hard risk layer. Every order intent passes through here. --------------
+risk:
+  floor_quote: 1000.0               # minimum reserve that must ALWAYS remain (quote ccy)
+  floor_buffer_quote: 50.0          # must recover to floor + buffer before trading resumes
+  min_notional_per_trade_quote: 10.0   # skip dust below this
+  max_notional_per_trade_quote: 50.0   # absolute cap per trade
+  max_notional_per_trade_pct_equity: 2.0   # ...and/or this % of equity (the tighter wins)
+  per_trade_risk_pct: 1.0           # risk no more than this % of equity per trade (1–2% range)
+  max_open_positions: 2
+  max_concurrent_open_orders: 4
+  max_trades_per_day: 20
+  max_daily_traded_notional_quote: 500.0
+  max_daily_loss_quote: 50.0        # halt when realized+unrealized daily loss exceeds this
+  daily_reset_utc_hour: 0           # rolling-day boundary (UTC hour) for daily counters
+
+# --- Fee-aware execution. A trade whose best case is negative after fees is never placed.
+fees:
+  maker_fee_pct: 0.40               # fallback if exchange does not expose tiers
+  taker_fee_pct: 0.60
+  pull_fee_tiers_from_exchange: true
+  round_trip_fee_safety_margin_pct: 0.20   # extra margin a move must clear on top of round-trip fees
+  maker_first: true                 # prefer maker (limit) orders for lower fees
+  allow_taker_fallback: false       # only cross the spread when explicitly allowed
+  maker_offset_pct: 0.05            # place maker orders this far inside the book
+  max_spread_pct: 0.30              # skip entries when bid/ask spread is wider than this
+  max_slippage_pct: 0.20            # skip when expected slippage exceeds this
+
+# --- Reference strategy (SMA crossover). Pluggable; swap via strategy.name later.
+strategy:
+  name: sma_crossover
+  timeframe: 1m
+  ohlcv_limit: 200
+  fast_period: 10
+  slow_period: 30                   # fast must be < slow
+  take_profit_pct: 1.5              # target move; MUST exceed round-trip fees + margin
+  stop_loss_pct: 1.0                # stop distance (drives the per-trade risk cap)
+  target_notional_quote: 40.0       # proposed size per signal (risk engine still caps it)
+  # Valuation filter — weighted-average-cost (VWAP) over/under-valuation:
+  vwap_filter_enabled: true         # gate buys/exits on valuation vs VWAP
+  vwap_window: 50                   # bars used to compute the volume-weighted average cost
+  buy_valuation_floor_pct: 0.0      # BUY only when price is <= this% vs VWAP (undervaluation floor)
+  force_exit_overvaluation_pct: 3.0 # FORCE-EXIT + emergency alert when price >= this% above VWAP
+  # Fee-drag controls (fewer, higher-conviction trades):
+  trade_cooldown_bars: 0            # minimum bars between entries (0 = off)
+  min_crossover_strength_pct: 0.0   # require (fast-slow)/slow >= this % at the crossover
+  # Active VWAP position sizing:
+  sizing_mode: fixed                # fixed | vwap_scaled (size up the more undervalued)
+  vwap_size_min_mult: 0.5
+  vwap_size_max_mult: 1.5
+  vwap_full_size_discount_pct: 2.0  # discount below VWAP that earns the max size
+  # Adaptive exits:
+  exit_mode: pct                    # pct | atr (volatility-based TP/SL)
+  atr_period: 14
+  atr_tp_mult: 2.0
+  atr_sl_mult: 1.5
+  trailing_enabled: false           # ratchet the stop up behind price (ATR-distance)
+  trailing_atr_mult: 2.0
+  # Trend/regime filter (only go long when the longer trend agrees):
+  trend_filter_enabled: false
+  trend_period: 100                 # long SMA; entries require price above it
+  # Volatility / mean-reversion thesis (used by the vwap_reversion strategy):
+  reversion_entry_pct: 1.0          # buy when price is this % below VWAP, exit back at VWAP
+  # Trend-following thesis (used by the donchian_breakout strategy). Validated as
+  # the best fit for BTC (positive OOS across 18/18 param settings). To run it,
+  # set `name: donchian_breakout` above. 50/15 is a robust mid-grid choice.
+  donchian_entry_period: 50         # go long on a close above the prior N-bar high
+  donchian_exit_period: 15          # exit on a close below the prior M-bar low (exit < entry)
+
+# --- Scheduled macro events (FOMC, CPI, PPI, NFP...). Manage exposure, not direction.
+events:
+  enabled: true
+  timezone: UTC
+  pre_event_window_minutes: 60      # protective window OPENS before the timestamp (pre-drift)
+  post_event_window_minutes: 30
+  pause_entries: true               # most conservative: no new entries inside the window
+  reduce_size_pct: 50.0             # if entries allowed, cut size by this %
+  widen_maker_offset_pct: 0.10      # widen maker spreads during the window
+  tighten_stops: true
+  calendar: []                      # inline list of {name, timestamp_utc}
+  calendar_csv: ""                  # OR a CSV feed: columns name,timestamp_utc (FOMC/CPI/NFP...)
+  include_halvings: true            # also treat BTC halving dates as event windows
+
+# --- Unscheduled shocks. Defensive only: pause, never auto-trade the direction.
+kill_switch:
+  enabled: true
+  rolling_window_minutes: 30
+  price_velocity_ratio: 5.0        # latest move >= 5x the median recent move
+  volume_spike_ratio: 8.0          # latest volume >= 8x the median recent volume
+  cooldown_minutes: 60              # volatility must normalize this long before auto-resume
+  pull_resting_orders: true
+
+# --- Optional slow regime overlay. OFF by default; fragile (see README/backtesting).
+regime:
+  enabled: false                    # slow risk-budget scaler (NOT a trade trigger); fragile
+  cadence_hours: 24
+  min_risk_multiplier: 0.25         # smallest fraction of normal size in an unfavorable regime
+  max_risk_multiplier: 1.0          # full size in a favorable regime
+  sma_weeks: 200                    # the "generational" long SMA (accumulation floor)
+  cycle_months: 48.0                # halving cycle length
+
+# --- Funding-rate positioning overlay (contrarian; fade crowded leverage) --
+funding:
+  enabled: false                    # scales long size by funding z-score; NOT a direction call
+  z_window: 30                      # funding periods (8h each) for the z-score
+  extreme_z: 1.5                    # |z| beyond this = crowded positioning
+  min_mult: 0.25                    # smallest long size when longs are crowded
+  max_mult: 1.0                     # full size when funding is favorable (negative)
+  gate_longs_when_crowded: false    # hard-skip new longs when funding is extreme
+
+# --- On-chain MVRV Z-score valuation overlay (slow; multi-year cycle metric) -
+mvrv:
+  enabled: false                    # scales long size by on-chain valuation; NOT a direction call
+  low_z: 0.0                        # at/below this Z = undervalued -> full size
+  high_z: 7.0                       # at/above this Z = euphoria -> smallest size
+  min_mult: 0.25
+  max_mult: 1.0
+  gate_when_rich: false             # hard-skip new longs when Z >= high_z
+
+# --- Telegram approval + control. Locked to allowlisted chat IDs. ----------
+telegram:
+  enabled: true
+  approval_threshold_quote: 0.0     # 0.0 => EVERY trade requires manual approval (most conservative)
+  approval_timeout_seconds: 300     # auto-REJECT if not approved in time
+  allowed_chat_ids: []              # numeric chat/user IDs allowed to control the bot
+
+# --- Reporting: weekly performance report (Telegram + optional email) ------
+reporting:
+  weekly_enabled: true
+  weekly_day: 0                     # 0=Mon .. 6=Sun — day the weekly report is sent
+  weekly_hour_utc: 8                # hour (UTC) the weekly report is sent
+  email_enabled: false              # also email the weekly report
+  smtp_host: smtp.gmail.com
+  smtp_port: 587
+  smtp_use_tls: true                # STARTTLS
+  email_from: ""                    # sender address (e.g. your Gmail)
+  email_to: []                      # recipient(s), e.g. ["you@example.com"]
+  # SMTP_USERNAME / SMTP_PASSWORD go in .env (Gmail: use an App Password)
+
+# --- App / runtime ---------------------------------------------------------
+app:
+  dry_run: true                     # paper mode — simulate fills, no live orders. ON by default.
+  trading_enabled: true             # master flag; flipped false on floor breach / kill switch
+  log_level: INFO
+  log_json: false
+  db_url: "sqlite:///data/tradingbot.db"   # parent dir auto-created; persist ./data in Docker
+  heartbeat_interval_seconds: 15
+  max_api_latency_ms: 2000          # auto-suspend trading if round-trip latency exceeds this
+  max_consecutive_failures: 3       # consecutive bad/failed pings before auto-suspend
+  health_recovery_samples: 3        # consecutive healthy pings before auto-resume
+  cancel_orders_on_suspend: true    # cancel resting bot orders when latency/connection degrades

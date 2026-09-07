@@ -1,0 +1,149 @@
+# =============================================================================
+# PRODUCTION config — UK / Kraken / 7-coin daily Donchian trend basket
+# -----------------------------------------------------------------------------
+# This wires the bot to the strategy validated in docs/RESEARCH_REPORT.md:
+# an equal-weight basket of 7 trending majors, each trading the Donchian
+# breakout on DAILY bars (long on a break above the prior 50-day high, exit on
+# a break below the prior 15-day low; long-only, no fixed take-profit).
+#
+# Starting capital assumed: ~£500, split into 7 equal sleeves (~£60 each).
+#
+# STAGE 1 (now): app.dry_run = true + exchange.sandbox = false
+#   -> REAL Kraken market data, SIMULATED fills, NO real money, NO API key needed.
+#   Run:  python3 -m tradingbot --config config.kraken-prod.yaml run
+#   Watch it for >=2 weeks; confirm it enters on breakouts and exits on the
+#   channel break across all 7 coins, and that the weekly report works.
+#
+# STAGE 3 (later, real money): set app.dry_run = false, add a TRADE-ONLY Kraken
+#   API key (NO withdrawal permission, IP-allowlisted) to .env, and configure
+#   Telegram for per-trade approval. Start with money you'd accept losing 30% of.
+# =============================================================================
+
+exchange:
+  name: kraken               # FCA-registered; lists all 7 coins incl. BNB; ccxt-supported
+  sandbox: false             # Kraken spot has no real testnet — we paper via app.dry_run
+  quote_currency: GBP        # GBP pairs avoid a USD FX leg (verify each pair exists, below)
+  symbols_allowlist:         # the 7 validated trend-majors. VERIFY these pair strings
+    - BTC/GBP                # exist on YOUR Kraken account at signup; if a /GBP pair is
+    - ETH/GBP                # missing for a coin, switch that one to /USD (and set
+    - BNB/GBP                # quote_currency handling accordingly) or drop it.
+    - ADA/GBP
+    - AVAX/GBP
+    - DOGE/GBP
+    - TRX/GBP
+  enable_rate_limit: true
+  request_timeout_ms: 20000
+  use_threaded_dns: true     # OS resolver, not aiodns (fixes macOS "Could not
+                             # contact DNS servers" on api.kraken.com)
+
+# --- Hard risk layer. Sized for ~£500 across 7 equal sleeves. ---------------
+# Risk model for THIS strategy = sleeve sizing (~£60/coin) + max 7 positions +
+# daily-loss stop + account floor. NOT per-trade-stop-risk: Donchian's stop is
+# the WIDE channel low, so a tight per_trade_risk_pct would block every entry
+# (see per_trade_risk_pct note). Worst case is the inherent risk of holding 7
+# cryptos; the backtest showed ~26-37% drawdowns in bear regimes.
+risk:
+  floor_quote: 25.0                 # hard cash reserve; a breach HALTS trading
+  floor_buffer_quote: 10.0          # must recover to floor+buffer before resuming
+  min_notional_per_trade_quote: 5.0    # above dust (verify per-coin Kraken minimums)
+  max_notional_per_trade_quote: 70.0   # absolute per-trade cap (just above a sleeve)
+  max_notional_per_trade_pct_equity: 14.0  # ~1/7 of book; auto-scales with equity
+  per_trade_risk_pct: 5.0           # loose ON PURPOSE — Donchian stops are wide channel
+                                    # lows; sizing/positions/daily-stop are the real guard
+  max_open_positions: 7             # one sleeve per coin
+  max_concurrent_open_orders: 8
+  max_trades_per_day: 14            # ~2 entries/coin/day of headroom (daily strategy)
+  max_daily_traded_notional_quote: 500.0
+  max_daily_loss_quote: 60.0        # ~12% of £500 — portfolio circuit breaker for the day
+  daily_reset_utc_hour: 0
+
+# --- Fee-aware execution. Kraken spot fees (0.16% maker / 0.26% taker). ------
+fees:
+  maker_fee_pct: 0.16               # Kraken Pro starting tier
+  taker_fee_pct: 0.26
+  pull_fee_tiers_from_exchange: true   # use your real tier once keys are set
+  round_trip_fee_safety_margin_pct: 0.20
+  maker_first: true                 # prefer limit (maker) on the breakout entry
+  allow_taker_fallback: true        # but ALLOW crossing to take the breakout / guarantee exits
+  maker_offset_pct: 0.05
+  max_spread_pct: 0.50              # GBP pairs can be thinner than USD — a touch wider
+  max_slippage_pct: 0.30
+  require_take_profit: false        # CRITICAL: the trend rider has NO take-profit (exits on
+                                    # the channel). Leaving this true rejects EVERY entry.
+
+# --- The validated strategy: daily Donchian breakout. ----------------------
+strategy:
+  name: donchian_breakout
+  timeframe: 1d                     # DAILY bars — the edge is daily/swing (dies at 1m)
+  ohlcv_limit: 120                  # must exceed donchian_entry_period + 1 (=51); buffer
+  target_notional_quote: 60.0       # the per-sleeve deployment (~£500 / 7, with cash buffer)
+  take_profit_pct: 1.5              # unused by donchian (no TP) — kept valid for the loader
+  stop_loss_pct: 1.0                # donchian stop = min(prior 15-day low, price-1%); the
+                                    # channel low normally binds (wide, Turtle-style)
+  vwap_filter_enabled: false
+  donchian_entry_period: 50         # long on a close above the prior 50-day high
+  donchian_exit_period: 15          # exit on a close below the prior 15-day low
+  trend_filter_enabled: false       # 200d-SMA gate RULED OUT (cut 86% of return; see report)
+
+# --- Macro-event exposure windows (FOMC/CPI/halving). Pause, don't trade. ---
+events:
+  enabled: true
+  timezone: UTC
+  pre_event_window_minutes: 60
+  post_event_window_minutes: 30
+  pause_entries: true
+  reduce_size_pct: 50.0
+  widen_maker_offset_pct: 0.10
+  tighten_stops: true
+  calendar: []
+  calendar_csv: ""
+  include_halvings: true
+
+# --- Unscheduled-shock kill switch. NOTE: tuned for intraday; on DAILY bars it
+# observes the last ~30 daily candles. Widened so normal big trend days (the
+# edge!) don't halt it; only a genuine multi-sigma shock does. REVIEW in Stage 1.
+kill_switch:
+  enabled: true
+  rolling_window_minutes: 30        # =last 30 daily candles here
+  price_velocity_ratio: 5.0        # latest move >= 5x the median recent move
+  volume_spike_ratio: 8.0          # latest volume >= 8x the median recent volume
+  cooldown_minutes: 1440            # 1-day cooldown (daily cadence)
+  pull_resting_orders: true
+
+# --- Slow overlays — OFF. (Cycle regime is fragile; funding/MVRV are governors
+# that only help a base WITH edge — add later once live behaviour is confirmed.)
+regime:
+  enabled: false
+funding:
+  enabled: false
+mvrv:
+  enabled: false
+
+# --- Telegram approval + alerts. Approval for EVERY trade (good for first live).
+# In Stage-1 paper WITHOUT a token configured, the runner auto-approves and warns.
+# Before Stage 3 (real money): add TELEGRAM_BOT_TOKEN to .env and your chat id below.
+telegram:
+  enabled: true
+  approval_threshold_quote: 0.0     # 0 => approve EVERY trade manually
+  approval_timeout_seconds: 300
+  allowed_chat_ids: []              # add your numeric Telegram chat id before going live
+
+reporting:
+  weekly_enabled: true
+  weekly_day: 0                     # Monday
+  weekly_hour_utc: 8
+  email_enabled: false
+
+# --- App / runtime ---------------------------------------------------------
+app:
+  dry_run: true                     # PAPER — simulated fills, NO real orders. START HERE.
+  paper_equity: 500.0               # size paper sleeves off £500 (no key/balance needed)
+  trading_enabled: true
+  log_level: INFO
+  log_json: false
+  db_url: "sqlite:///data/tradingbot_kraken.db"
+  heartbeat_interval_seconds: 3600  # poll hourly — ample for a daily strategy, easy on the API
+  max_api_latency_ms: 3000
+  max_consecutive_failures: 3
+  health_recovery_samples: 3
+  cancel_orders_on_suspend: true
