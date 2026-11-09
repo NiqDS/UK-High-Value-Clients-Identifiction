@@ -1,0 +1,8 @@
+jupyter>=1.0
+matplotlib>=3.7
+missingno>=0.5
+numpy>=1.24
+pandas>=2.0
+scikit-learn>=1.4
+scipy>=1.10
+seaborn>=0.13

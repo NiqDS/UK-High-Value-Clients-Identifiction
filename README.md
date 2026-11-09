@@ -1,6 +1,22 @@
 # UK-High-Value-Clients-Identifiction
 Identifying high value clients from a dataset via k-means clustering
 
+## Reproduce the analysis
+
+Install the notebook dependencies from this directory:
+
+```bash
+python3 -m pip install -r requirements.txt
+jupyter notebook "High Value Clients UK.ipynb"
+```
+
+The notebook reads `Ecommerce.zip` directly. Customer revenue is net sales
+(`UNITPRICE * QUANTITY`), so returned quantities reduce revenue. K-means uses
+the same MinMax-scaled item and revenue features for both the elbow calculation
+and final clusters, with a fixed random seed. The notebook clears saved outputs
+when its analysis changes; rerun all cells before using its charts or cluster
+assignments.
+
 Submition for a Kaggle task: https://www.kaggle.com/vik2012kvs/high-value-customers-identification
 
 Background of Problem Statement:
