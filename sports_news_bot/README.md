@@ -2,6 +2,9 @@
 
 A Telegram bot that monitors sports news for any team you choose. It searches sources in **multiple languages** simultaneously, translates everything into **your preferred language**, and delivers formatted posts every **15 minutes**.
 
+Feed timestamps are normalized to naive UTC before storage and sorting. Article
+image fetching uses the system's normal TLS certificate verification.
+
 ---
 
 ## Features

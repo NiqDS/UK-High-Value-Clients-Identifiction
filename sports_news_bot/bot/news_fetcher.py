@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import quote_plus
@@ -8,7 +8,6 @@ from urllib.parse import quote_plus
 import aiohttp
 import feedparser
 from bs4 import BeautifulSoup
-
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -64,10 +63,9 @@ async def fetch_article_image(url: str) -> str:
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(
-                url, headers=_HEADERS,
+                url,                 headers=_HEADERS,
                 timeout=aiohttp.ClientTimeout(total=6, connect=3),
                 allow_redirects=True,
-                ssl=False,
             ) as resp:
                 if resp.status != 200:
                     return ""
@@ -95,10 +93,13 @@ def _parse_date(entry: Any) -> datetime:
     try:
         raw = getattr(entry, "published", None) or getattr(entry, "updated", None)
         if raw:
-            return parsedate_to_datetime(raw).replace(tzinfo=None)
+            published = parsedate_to_datetime(raw)
+            if published.tzinfo is None:
+                published = published.replace(tzinfo=timezone.utc)
+            return published.astimezone(timezone.utc).replace(tzinfo=None)
     except Exception:
         pass
-    return datetime.utcnow()
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
 async def _fetch_feed(url: str, session: aiohttp.ClientSession) -> List[Any]:
