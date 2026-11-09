@@ -10,22 +10,24 @@ strategies to find an item name and price:
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import random
 import re
 from typing import Optional
+from urllib.parse import urljoin
 
 import httpx
-from bs4 import BeautifulSoup
-
 import playwright_scraper
+from bs4 import BeautifulSoup
 from config import (
     REQUEST_TIMEOUT_SECONDS,
     USE_PLAYWRIGHT_FALLBACK,
     USER_AGENTS,
 )
 from models import ScrapeResult
+from url_security import validate_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +87,7 @@ def _detect_currency(text: str) -> str:
 
 
 async def fetch_html(url: str) -> str:
-    """Fetch a page, raising ScrapeError on any failure."""
+    """Fetch a public page, revalidating every redirect destination."""
     headers = {
         "User-Agent": random.choice(USER_AGENTS),
         "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -94,12 +96,24 @@ async def fetch_html(url: str) -> str:
     try:
         async with httpx.AsyncClient(
             timeout=REQUEST_TIMEOUT_SECONDS,
-            follow_redirects=True,
+            follow_redirects=False,
             headers=headers,
         ) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            return resp.text
+            current_url = url
+            for _ in range(6):
+                await asyncio.to_thread(validate_public_url, current_url)
+                resp = await client.get(current_url)
+                if resp.is_redirect:
+                    location = resp.headers.get("location")
+                    if not location:
+                        raise ScrapeError("Redirect response had no Location header")
+                    current_url = urljoin(current_url, location)
+                    continue
+                resp.raise_for_status()
+                return resp.text
+            raise ScrapeError("Too many redirects")
+    except ValueError as exc:
+        raise ScrapeError(f"Unsafe URL: {exc}") from exc
     except httpx.HTTPStatusError as exc:
         raise ScrapeError(
             f"HTTP {exc.response.status_code} fetching {url}"

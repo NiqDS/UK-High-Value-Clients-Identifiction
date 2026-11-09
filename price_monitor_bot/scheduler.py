@@ -117,8 +117,8 @@ class MonitorScheduler:
             return
 
         if round(old_price, 2) != new_price:
-            await self._send_alert(item, old_price, new_price)
-            await self._db.update_price(item_id, new_price)
+            if await self._send_alert(item, old_price, new_price):
+                await self._db.update_price(item_id, new_price)
         else:
             await self._db.touch_checked(item_id)
 
@@ -154,7 +154,7 @@ class MonitorScheduler:
 
     async def _send_alert(
         self, item: MonitoredItem, old_price: float, new_price: float
-    ) -> None:
+    ) -> bool:
         diff = round(new_price - old_price, 2)
         pct = round((diff / old_price) * 100, 2) if old_price else 0.0
         arrow = "📈" if diff > 0 else "📉"
@@ -167,15 +167,17 @@ class MonitorScheduler:
             f"💰 New price: {sym}{new_price:.2f}\n"
             f"{arrow} Change: {sign}{sym}{diff:.2f} ({sign}{pct:.2f}%)"
         )
-        await self._safe_send(item.chat_id, text)
+        return await self._safe_send(item.chat_id, text)
 
-    async def _safe_send(self, chat_id: int, text: str) -> None:
+    async def _safe_send(self, chat_id: int, text: str) -> bool:
         try:
             await self._app.bot.send_message(
                 chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN
             )
+            return True
         except Exception:  # noqa: BLE001
             logger.exception("Failed to send message to chat %d", chat_id)
+            return False
 
 
 def _md(text: str) -> str:

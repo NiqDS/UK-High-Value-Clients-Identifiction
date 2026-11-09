@@ -17,6 +17,9 @@ whenever a monitored price changes.
   reloaded on startup.
 - User-agent rotation, retry-once-then-skip error handling, and a warning after
   5 consecutive failed checks.
+- User-supplied URLs and redirect targets are checked for public HTTP(S)
+  destinations before fetching; deploy with outbound network rules that also
+  block private and link-local ranges.
 
 ## Commands
 
@@ -72,6 +75,7 @@ price_monitor_bot/
 ├── handlers.py           # Command, message and callback-query handlers
 ├── scraper.py            # Static price extraction + fallback orchestration
 ├── playwright_scraper.py # Headless-browser fallback for JS pages
+├── url_security.py       # Public URL and destination checks
 ├── scheduler.py          # APScheduler job management + price-check logic
 ├── database.py    # Async SQLite layer
 ├── models.py      # Data classes

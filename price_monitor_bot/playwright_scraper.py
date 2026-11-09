@@ -6,6 +6,7 @@ returns False and the caller simply skips the fallback.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import random
@@ -16,6 +17,7 @@ from config import (
     PLAYWRIGHT_TIMEOUT_SECONDS,
     USER_AGENTS,
 )
+from url_security import validate_public_url
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +72,15 @@ async def fetch_rendered_html(url: str) -> Optional[str]:
                     locale="en-GB",
                 )
                 page = await context.new_page()
+                async def guard_request(route, request):
+                    try:
+                        await asyncio.to_thread(validate_public_url, request.url)
+                    except ValueError:
+                        await route.abort()
+                    else:
+                        await route.continue_()
+
+                await page.route("**/*", guard_request)
                 await page.goto(url, timeout=timeout_ms, wait_until="domcontentloaded")
                 # Give late client-side rendering a chance to settle.
                 try:
