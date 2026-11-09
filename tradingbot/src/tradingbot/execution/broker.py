@@ -94,9 +94,22 @@ class LiveBroker:
 
         status = ExecStatus.OPEN
         fill = None
-        if (raw.get("status") == "closed") or raw.get("filled"):
+        filled_amount = float(raw.get("filled") or 0.0)
+        remaining = raw.get("remaining")
+        complete = (
+            str(raw.get("status", "")).lower() == "closed"
+            and (remaining is None or float(remaining) <= 1e-12)
+        )
+        if complete:
+            status = ExecStatus.FILLED
+            if filled_amount <= 0:
+                filled_amount = order.amount
+        elif filled_amount > 0:
+            status = ExecStatus.PARTIALLY_FILLED
+
+        if filled_amount > 0:
             avg = raw.get("average") or raw.get("price") or order.price or order.reference_price
-            amount = float(raw.get("filled") or order.amount)
+            amount = filled_amount
             fee_info = raw.get("fee") or {}
             fee_cost = float(fee_info.get("cost") or 0.0)
             fee_ccy = str(fee_info.get("currency") or "").upper()
@@ -119,7 +132,6 @@ class LiveBroker:
                 cost_quote=float(avg) * amount,
                 timestamp=utcnow(),
             )
-            status = ExecStatus.FILLED
         return ExecutionResult(status=status, order=order, fill=fill,
                                exchange_order_id=str(raw.get("id")) if raw.get("id") else None)
 

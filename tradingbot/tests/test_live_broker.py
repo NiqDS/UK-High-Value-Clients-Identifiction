@@ -56,3 +56,12 @@ async def test_resting_order_returns_open_no_fill() -> None:
     result = await LiveBroker(FakeAdapter(raw)).place_order(order())
     assert result.status is ExecStatus.OPEN
     assert result.fill is None
+
+
+async def test_open_order_with_partial_fill_is_not_reported_fully_filled() -> None:
+    raw = {"id": "1", "status": "open", "filled": 0.00575, "remaining": 0.01725,
+           "average": 2000.0}
+    result = await LiveBroker(FakeAdapter(raw)).place_order(order())
+    assert result.status is ExecStatus.PARTIALLY_FILLED
+    assert result.filled is True
+    assert result.fill.amount == pytest.approx(0.00575)

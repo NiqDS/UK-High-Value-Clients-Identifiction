@@ -108,14 +108,21 @@ def test_portfolio_backtest_with_momentum_gate_runs_and_reports() -> None:
 
 def test_cli_rejects_momentum_without_top_k() -> None:
     # exercised at the CLI layer: --momentum requires --top-k (and vice versa)
+    import os
     import subprocess
     import sys
+    from pathlib import Path
 
+    repo_root = Path(__file__).resolve().parents[1]
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join(
+        path for path in (str(repo_root / "src"), env.get("PYTHONPATH", "")) if path
+    )
     proc = subprocess.run(
         [sys.executable, "-m", "tradingbot", "portfolio",
          "--asset", "X=nonexistent.csv", "--momentum", "60"],
         capture_output=True, text=True,
-        cwd="/home/user/UK-High-Value-Clients-Identifiction/tradingbot",
+        cwd=repo_root, env=env, timeout=10, check=False,
     )
     assert proc.returncode == 2
     assert "--momentum and --top-k must be set together" in proc.stderr + proc.stdout

@@ -16,7 +16,7 @@ dependencies = [
     "pydantic-settings>=2.2",
     "PyYAML>=6.0",
     "python-telegram-bot>=20.7",
-    "SQLAlchemy>=2.0",
+    "SQLAlchemy[asyncio]>=2.0",
     "python-dotenv>=1.0",
     "certifi>=2024.0",
 ]

@@ -53,13 +53,15 @@ def buy(**kw) -> OrderIntent:
     return OrderIntent(**params)
 
 
-def snapshot() -> AccountSnapshot:
-    return AccountSnapshot(
+def snapshot(**kw) -> AccountSnapshot:
+    params = dict(
         equity_quote=3000.0, free_quote=3000.0,
         ticker=Ticker("BTC/USD", bid=99.95, ask=100.05, last=100.0,
                       base_volume=1, quote_volume=1, timestamp=0),
         now=NOW,
     )
+    params.update(kw)
+    return AccountSnapshot(**params)
 
 
 async def test_event_window_pauses_entry() -> None:
@@ -99,7 +101,7 @@ async def test_exit_not_paused_by_posture() -> None:
     provider = PostureProvider(event_module=EventRiskModule(cfg, EventCalendar.from_config(cfg)))
     res = await build(provider).process(
         buy(side=Side.SELL, is_entry=False, take_profit_price=None, stop_price=None),
-        snapshot(),
+        snapshot(position_units={"BTC/USD": 0.4}),
     )
     assert res.outcome is not Outcome.PAUSED  # exits are never paused by posture
     assert res.outcome is Outcome.EXECUTED

@@ -282,6 +282,10 @@ class TradingRunner:
         equity, free = await self._equity_free()
         snapshot = AccountSnapshot(
             equity_quote=equity, free_quote=free, open_positions=len(self.portfolio.positions),
+            position_units={
+                symbol: position.units
+                for symbol, position in self.portfolio.positions.items()
+            },
             open_orders=open_orders, unrealized_pnl_quote=self._unrealized_pnl(),
             ticker=ticker, now=now,
         )

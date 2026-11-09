@@ -263,7 +263,7 @@ def test_sell_does_not_threaten_floor() -> None:
     cfg = make_config(risk={"floor_quote": 1000.0})
     d = make_engine(cfg).evaluate(
         base_intent(side=Side.SELL, is_entry=False, take_profit_price=None, stop_price=None),
-        base_snapshot(free_quote=1010.0),
+        base_snapshot(free_quote=1010.0, position_units={"BTC/USD": 0.4}),
     )
     assert d.approved is True  # selling adds quote, floor not breached
 
@@ -297,37 +297,41 @@ def exit_intent(**kw) -> OrderIntent:
     return OrderIntent(**params)
 
 
+def exit_snapshot(units: float = 0.4, **kw) -> AccountSnapshot:
+    return base_snapshot(position_units={"BTC/USD": units}, **kw)
+
+
 # --- exits are risk-REDUCING: never blocked by budget/size/market gates -----
 def test_exit_allowed_when_trading_disabled() -> None:
     # a halted bot must still be able to DE-RISK (floor breach / manual pause)
     store = InMemoryRiskStateStore()
     store.set_trading_enabled(False, "floor breach")
-    d = RiskEngine(make_config(), store).evaluate(exit_intent(), base_snapshot())
+    d = RiskEngine(make_config(), store).evaluate(exit_intent(), exit_snapshot())
     assert d.approved is True
 
 
 def test_exit_allowed_when_daily_loss_tripped() -> None:
     # the daily-loss circuit breaker must not forbid closing the losing positions
     d = make_engine().evaluate(
-        exit_intent(), base_snapshot(unrealized_pnl_quote=-10_000.0))
+        exit_intent(), exit_snapshot(unrealized_pnl_quote=-10_000.0))
     assert d.approved is True
 
 
 def test_exit_allowed_above_max_notional() -> None:
     # a WINNING position grown past the per-trade cap must still be sellable
-    d = make_engine().evaluate(exit_intent(amount=50.0), base_snapshot())  # 5000 >> cap
+    d = make_engine().evaluate(exit_intent(amount=50.0), exit_snapshot(50.0))  # 5000 >> cap
     assert d.approved is True
 
 
 def test_exit_allowed_below_min_notional() -> None:
     # dust / crashed-sleeve exits must not be stranded by the dust gate
-    d = make_engine().evaluate(exit_intent(amount=0.001), base_snapshot())  # 0.10 notional
+    d = make_engine().evaluate(exit_intent(amount=0.001), exit_snapshot(0.001))  # 0.10 notional
     assert d.approved is True
 
 
 def test_exit_allowed_in_wide_spread() -> None:
     # spreads blow out exactly when stops must fire
-    wide = base_snapshot(ticker=make_ticker(bid=95.0, ask=105.0))
+    wide = exit_snapshot(ticker=make_ticker(bid=95.0, ask=105.0))
     d = make_engine().evaluate(exit_intent(), wide)
     assert d.approved is True
 
@@ -349,11 +353,30 @@ def test_exits_never_require_approval() -> None:
     # an exit reduces risk — it must execute immediately, never wait on a tap
     cfg = make_config(telegram={"approval_threshold_quote": 0.0})
     d = make_engine(cfg).evaluate(
-        base_intent(is_entry=False, take_profit_price=None, stop_price=None),
-        base_snapshot(),
+        base_intent(side=Side.SELL, is_entry=False, take_profit_price=None, stop_price=None),
+        exit_snapshot(),
     )
     assert d.approved is True
     assert d.requires_approval is False
+
+
+def test_exit_flag_cannot_turn_a_buy_into_an_exit() -> None:
+    d = make_engine().evaluate(
+        base_intent(is_entry=False, take_profit_price=None, stop_price=None),
+        exit_snapshot(100.0),
+    )
+    assert d.approved is False
+    assert d.gate is RiskGate.INVALID_INTENT
+
+
+def test_exit_requires_a_tracked_position_and_cannot_oversell() -> None:
+    engine = make_engine()
+    no_position = engine.evaluate(exit_intent(), base_snapshot())
+    oversell = engine.evaluate(exit_intent(amount=0.5), exit_snapshot(0.4))
+    assert no_position.approved is False
+    assert oversell.approved is False
+    assert no_position.gate is RiskGate.INVALID_INTENT
+    assert oversell.gate is RiskGate.INVALID_INTENT
 
 
 def test_threshold_zero_requires_approval_for_all() -> None:

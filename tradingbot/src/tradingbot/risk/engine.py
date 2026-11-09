@@ -65,6 +65,7 @@ class AccountSnapshot:
     equity_quote: float
     free_quote: float
     used_quote: float = 0.0
+    position_units: dict[str, float] = field(default_factory=dict)
     open_positions: int = 0
     open_orders: int = 0
     ticker: Ticker | None = None
@@ -175,6 +176,19 @@ class RiskEngine:
         #     fire. Exits execute; the floor cannot be threatened by a sell (it
         #     adds free balance).
         if not intent.is_entry:
+            if intent.side is not Side.SELL:
+                return RiskDecision.reject(
+                    RiskGate.INVALID_INTENT,
+                    "a long-only exit must be a sell",
+                    est_price=est_price, notional=notional,
+                )
+            held_units = snapshot.position_units.get(intent.symbol, 0.0)
+            if held_units <= 0 or intent.amount > held_units + 1e-12:
+                return RiskDecision.reject(
+                    RiskGate.INVALID_INTENT,
+                    f"exit amount {intent.amount} exceeds tracked {intent.symbol} position {held_units}",
+                    est_price=est_price, notional=notional,
+                )
             if not self.store.is_trading_enabled():
                 logger.warning(
                     "Trading disabled (%s) — allowing risk-REDUCING exit for %s anyway",

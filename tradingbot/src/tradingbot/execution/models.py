@@ -16,6 +16,7 @@ class LiquidityRole(str, Enum):
 
 class ExecStatus(str, Enum):
     FILLED = "filled"
+    PARTIALLY_FILLED = "partially_filled"
     OPEN = "open"  # resting (live maker order not yet filled)
     REJECTED = "rejected"  # execution-layer guard rejected (e.g. slippage, taker not allowed)
     SKIPPED = "skipped"
@@ -62,7 +63,7 @@ class ExecutionResult:
 
     @property
     def filled(self) -> bool:
-        return self.status is ExecStatus.FILLED
+        return self.status in {ExecStatus.FILLED, ExecStatus.PARTIALLY_FILLED}
 
 
 def utcnow() -> datetime:

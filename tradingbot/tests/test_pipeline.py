@@ -110,7 +110,7 @@ async def test_emergency_exit_bypasses_approval_and_alerts() -> None:
         price=100.0, is_entry=False,
         metadata={"emergency": True, "vwap": 95.0, "valuation_pct": 5.2, "valuation": "overvalued"},
     )
-    res = await pipeline.process(emergency, snapshot())
+    res = await pipeline.process(emergency, snapshot(position_units={"BTC/USD": 0.4}))
     assert res.outcome is Outcome.EXECUTED
     assert res.execution.filled
     assert len(alerts) == 1 and "EMERGENCY" in alerts[0]
