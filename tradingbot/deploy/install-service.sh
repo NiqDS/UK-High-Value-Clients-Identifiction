@@ -15,8 +15,11 @@
 # =============================================================================
 set -euo pipefail
 
-CONFIG="${1:-config.bybit-test-active.yaml}"
+CONFIG="${1:-config.bybit-daily-paper.yaml}"
 SUFFIX="${2:-}"
+case "$CONFIG:$SUFFIX" in
+  *4h*|*4H*) echo "ERROR: the four-hour service is retired."; exit 1 ;;
+esac
 APP_DIR="$HOME/UK-High-Value-Clients-Identifiction/tradingbot"
 SERVICE_NAME="tradingbot${SUFFIX:+-$SUFFIX}"
 RUN_USER="$(id -un)"

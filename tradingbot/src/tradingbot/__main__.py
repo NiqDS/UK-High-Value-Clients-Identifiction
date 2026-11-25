@@ -103,6 +103,8 @@ async def _paper_run(settings: Settings) -> int:
     from .strategy import MarketData, build_strategy
 
     cfg = settings.config
+    if cfg.strategy.daily_policy_enabled:
+        raise RuntimeError('Daily policy requires the persistent run command, not the paper demo')
     store = InMemoryRiskStateStore(daily_reset_utc_hour=cfg.risk.daily_reset_utc_hour)
     engine = RiskEngine(cfg, store)
     executor = Executor(cfg, PaperBroker(cfg.fees))  # paper only — never live here
@@ -716,6 +718,10 @@ def _build_runner(settings: Settings):
     from .strategy import build_strategy
 
     cfg = settings.config
+    if not cfg.app.dry_run:
+        raise RuntimeError('Live mode blocked: daily safety integration and venue protection tests are pending')
+    if not cfg.app.trading_enabled:
+        raise RuntimeError('Trading disabled by configuration')
 
     # persistence: apply saved runtime overrides, then build the SQLite store
     from .approval.controls import JsonOverrideStore
@@ -723,6 +729,10 @@ def _build_runner(settings: Settings):
     state_dir = runtime_state_dir(cfg.app.db_url, cfg.app.dry_run)
     overrides_path = state_dir / "runtime_overrides.json"
     JsonOverrideStore(overrides_path).apply(cfg)
+    if not cfg.app.dry_run:
+        raise RuntimeError('Live mode blocked: saved overrides cannot enable this safety build')
+    if not cfg.app.trading_enabled:
+        raise RuntimeError('Trading disabled by saved configuration')
     sf = make_session_factory(cfg.app.db_url)
     store = SqliteRiskStateStore(sf, daily_reset_utc_hour=cfg.risk.daily_reset_utc_hour)
     trade_log = TradeLog(sf)
@@ -740,7 +750,8 @@ def _build_runner(settings: Settings):
     # positions survive restarts: a forgotten open position would have no stop
     # and no exit, and the next signal would re-buy on top of it
     from .app.portfolio import JsonPositionStore
-    position_store = JsonPositionStore(state_dir / "positions.json", strict=not cfg.app.dry_run)
+    position_store = JsonPositionStore(state_dir / "positions.json",
+                                      strict=not cfg.app.dry_run or cfg.strategy.daily_policy_enabled)
     portfolio = position_store.load()
     reporter = WeeklyReporter(trade_log)
     email_sender = build_email_sender(cfg.reporting, settings.secrets)
@@ -860,6 +871,10 @@ def _build_runner(settings: Settings):
     pipeline = TradingPipeline(cfg, engine, executor, store, approver=approver,
                                posture_provider=posture, health=health,
                                emergency_alert=emergency_alert)
+    if cfg.strategy.daily_policy_enabled:
+        from .strategy.daily_policy import EntryClaims
+        pipeline.entry_claim = EntryClaims(state_dir / 'entry_claims.sqlite').claim
+
     runner = TradingRunner(
         settings=settings, adapter=adapter, pipeline=pipeline, strategy=strategy,
         store=store, trade_log=trade_log, portfolio=portfolio, kill_switch=kill_switch,

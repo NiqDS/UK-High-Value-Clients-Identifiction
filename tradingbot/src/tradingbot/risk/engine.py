@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from enum import Enum
 
 from ..config import Config
-from ..domain import OrderIntent, Side
+from ..domain import OrderIntent, OrderType, Side
 from ..exchange.models import Ticker
 from .state import RiskStateStore
 
@@ -115,6 +115,8 @@ class RiskEngine:
         return snapshot.maker_fee_pct if snapshot.maker_fee_pct is not None else fees.maker_fee_pct
 
     def _est_price(self, intent: OrderIntent, snapshot: AccountSnapshot) -> float | None:
+        if intent.order_type is OrderType.MARKET and snapshot.ticker is not None:
+            return snapshot.ticker.ask if intent.side == Side.BUY else snapshot.ticker.bid
         if intent.price is not None and intent.price > 0:
             return intent.price
         t = snapshot.ticker
@@ -127,6 +129,12 @@ class RiskEngine:
     def evaluate(self, intent: OrderIntent, snapshot: AccountSnapshot) -> RiskDecision:
         cfg = self.config
         risk = cfg.risk
+        import math
+        values = [intent.amount, snapshot.equity_quote, snapshot.free_quote,
+                  snapshot.used_quote, snapshot.unrealized_pnl_quote]
+        if (any(not math.isfinite(x) for x in values)
+                or min(snapshot.equity_quote, snapshot.free_quote, snapshot.used_quote) < 0):
+            return RiskDecision.reject(RiskGate.INVALID_INTENT, 'Invalid numeric account state')
 
         # 2. symbol allowlist (universal — applies to entries AND exits)
         if intent.symbol not in cfg.exchange.symbols_allowlist:
@@ -135,10 +143,11 @@ class RiskEngine:
             )
 
         # 3. intent sanity + usable price (universal)
-        if intent.amount <= 0:
+        if (intent.amount <= 0 or (intent.stop_price is not None and (
+                not math.isfinite(intent.stop_price) or intent.stop_price <= 0))):
             return RiskDecision.reject(RiskGate.INVALID_INTENT, "amount must be > 0")
         est_price = self._est_price(intent, snapshot)
-        if est_price is None:
+        if est_price is None or not math.isfinite(est_price) or est_price <= 0:
             return RiskDecision.reject(
                 RiskGate.INVALID_INTENT, "no usable price (no limit price and no ticker)"
             )

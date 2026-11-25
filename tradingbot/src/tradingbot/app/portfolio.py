@@ -36,6 +36,7 @@ class Position:
 @dataclass
 class PositionTracker:
     positions: dict[str, Position] = field(default_factory=dict)
+    cash_quote: float | None = None
 
     def holding(self, symbol: str) -> bool:
         return symbol in self.positions
@@ -87,6 +88,11 @@ class JsonPositionStore:
             return tracker
         try:
             data = json.loads(self._path.read_text())
+            tracker.cash_quote = data.get('cash_quote')
+            if tracker.cash_quote is not None:
+                import math
+                if not math.isfinite(tracker.cash_quote) or tracker.cash_quote < 0:
+                    raise ValueError('Invalid saved cash')
             for row in data.get("positions", []):
                 pos = Position(
                     symbol=row["symbol"], units=float(row["units"]),
@@ -119,6 +125,7 @@ class JsonPositionStore:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "saved_at": datetime.now(timezone.utc).isoformat(),
+                "cash_quote": tracker.cash_quote,
                 "positions": [
                     {
                         "symbol": p.symbol, "units": p.units,

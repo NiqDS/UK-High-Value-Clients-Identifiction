@@ -153,17 +153,42 @@ class TradingRunner:
                 and _time.monotonic() - self._equity_cache_mono < 30.0):
             return self._equity_cache
         quote = self.cfg.exchange.quote_currency
-        if self.cfg.app.dry_run:
-            simulated = self.cfg.app.paper_equity or self.cfg.risk.floor_quote * 3
-            result = (simulated, simulated)
-        else:
-            if not self.settings.secrets.has_exchange_credentials:
-                raise AccountStateUnavailable("Live credentials are missing")
-            try:
+        from ..strategy.daily_policy import finite
+        try:
+            if self.cfg.app.dry_run:
+                if self.portfolio.cash_quote is None:
+                    if self.cfg.strategy.daily_policy_enabled and self.portfolio.positions:
+                        raise AccountStateUnavailable('Paper positions need a verified starting cash balance')
+                    self.portfolio.cash_quote = self.cfg.app.paper_equity or self.cfg.risk.floor_quote * 3
+                cash = finite(self.portfolio.cash_quote)
+                holdings = {symbol: finite(pos.units) for symbol, pos in self.portfolio.positions.items()}
+                free = cash
+            else:
+                if not self.settings.secrets.has_exchange_credentials:
+                    raise AccountStateUnavailable("Live credentials are missing")
                 bal = await self.adapter.fetch_balance()
-                result = (bal.total(quote), bal.free(quote))
-            except Exception as exc:
-                raise AccountStateUnavailable("Live account balance unavailable") from exc
+                cash, free = finite(bal.total(quote)), finite(bal.free(quote))
+                if free > cash:
+                    raise ValueError('Free cash exceeds total cash')
+                markets = {symbol.split('/')[0]: symbol for symbol in self.cfg.exchange.symbols_allowlist}
+                holdings = {}
+                for currency, balance in bal.balances.items():
+                    units = finite(balance.total)
+                    if currency == quote or units == 0:
+                        continue
+                    if currency not in markets:
+                        raise ValueError('Unpriced asset in account')
+                    holdings[markets[currency]] = units
+            equity = cash
+            for symbol, units in holdings.items():
+                if units:
+                    ticker = await self.adapter.fetch_ticker(symbol)
+                    equity += units * finite(ticker.last, positive=True)
+            result = (finite(equity), free)
+        except AccountStateUnavailable:
+            raise
+        except Exception as exc:
+            raise AccountStateUnavailable("Account value cannot be verified") from exc
         self._equity_cache = result
         self._equity_cache_mono = _time.monotonic()
         return result
@@ -262,6 +287,12 @@ class TradingRunner:
         if self.cfg.strategy.signal_on_closed_bar:
             candles = drop_forming_candle(candles, self.cfg.strategy.timeframe, now)
 
+        if self.cfg.strategy.daily_policy_enabled:
+            from ..strategy.daily_policy import validate_daily_window
+            validate_daily_window(candles, int(now.timestamp() * 1000),
+                                  max(self.cfg.strategy.donchian_entry_period,
+                                      self.cfg.strategy.donchian_exit_period) + 1)
+
         # feed the volatility kill-switch PER SYMBOL (dedup + count-window handled
         # internally, so re-feeding recent bars each poll is safe)
         if self.kill_switch is not None:
@@ -294,11 +325,42 @@ class TradingRunner:
             open_orders=open_orders, unrealized_pnl_quote=self._unrealized_pnl(),
             ticker=ticker, now=now,
         )
+        if self.cfg.strategy.daily_policy_enabled:
+            intents = self._size_daily_entries(intents, snapshot)
         results = await self.pipeline.process_signals(intents, snapshot)
         alerts = self._apply_fills(results, now)
         for a in alerts:
             await self._deliver_trade_alert(a)
         return results
+
+    def _size_daily_entries(self, intents, snapshot):
+        from dataclasses import replace
+        from ..strategy.daily_policy import finite
+        result = []
+        for intent in intents:
+            if not intent.is_entry:
+                result.append(intent)
+                continue
+            try:
+                ask = finite(snapshot.ticker.ask, positive=True)
+                stop = finite(intent.stop_price, positive=True)
+                if ask <= stop:
+                    continue
+                equity, free = finite(snapshot.equity_quote), finite(snapshot.free_quote)
+                risk = self.cfg.risk
+                fee = self.cfg.fees.taker_fee_pct / 100
+                budget = min(self.cfg.strategy.target_notional_quote,
+                             risk.max_notional_per_trade_quote,
+                             max(0, free - risk.floor_quote - risk.floor_buffer_quote) / (1 + fee))
+                if risk.max_notional_per_trade_pct_equity > 0:
+                    budget = min(budget, equity * risk.max_notional_per_trade_pct_equity / 100)
+                units = min(budget / ask, equity * risk.per_trade_risk_pct / 100 / (ask - stop))
+                if units <= 0:
+                    continue
+                result.append(replace(intent, amount=units, price=ask))
+            except (ValueError, TypeError, AttributeError):
+                logger.error('Daily entry blocked: invalid sizing state')
+        return result
 
     def _normalize_exits(self, symbol: str, intents: list[OrderIntent]) -> list[OrderIntent]:
         """Exits close the ACTUAL position. Strategies size exits from notional
@@ -456,6 +518,16 @@ class TradingRunner:
             if f.side == Side.SELL:
                 held = self.portfolio.get(f.symbol)
                 entry_price = held.entry_price if held else None
+            if self.cfg.app.dry_run:
+                from ..strategy.daily_policy import finite
+                cash = self.portfolio.cash_quote
+                if cash is None:
+                    cash = self.cfg.app.paper_equity or self.cfg.risk.floor_quote * 3
+                cost, fee = finite(f.cost_quote), finite(f.fee_quote)
+                new_cash = cash - cost - fee if f.side == Side.BUY else cash + cost - fee
+                if new_cash < -1e-8:
+                    raise ValueError('Paper fill exceeds available cash')
+                self.portfolio.cash_quote = max(0, new_cash)
             realized = self.portfolio.on_fill(
                 f.symbol, f.side, f.price, f.amount, now,
                 take_profit=intent.take_profit_price, stop=intent.stop_price,

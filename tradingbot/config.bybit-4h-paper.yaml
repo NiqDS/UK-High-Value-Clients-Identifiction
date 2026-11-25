@@ -1,3 +1,4 @@
+# RETIRED: four-hour service disabled by the operator. Historical research only.
 # =============================================================================
 # 4h RESEARCH PAPER BUCKET — Bybit MAINNET data, SIMULATED fills (dry_run).
 # -----------------------------------------------------------------------------
@@ -134,7 +135,7 @@ reporting:
 app:
   dry_run: true                      # PAPER — locked. Never flip; 4h is unvalidated forward.
   paper_equity: 180.0
-  trading_enabled: true
+  trading_enabled: false
   log_level: INFO
   log_json: false
   log_file: "data/4h_paper.log"

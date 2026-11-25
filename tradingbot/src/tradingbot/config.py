@@ -176,6 +176,7 @@ class StrategyConfig(BaseModel):
     # the live intraday tick — matching how the strategy was validated in
     # backtests. Recommended true for live daily-bar trend trading.
     signal_on_closed_bar: bool = False
+    daily_policy_enabled: bool = False
     # Valuation filter: weighted-average-cost (VWAP) over/under-valuation.
     vwap_filter_enabled: bool = True
     vwap_window: int = Field(default=50, gt=0)
@@ -225,6 +226,14 @@ class StrategyConfig(BaseModel):
 
     @model_validator(mode="after")
     def _check_periods(self) -> "StrategyConfig":
+        if self.daily_policy_enabled and (
+            self.name != 'donchian_breakout' or self.timeframe != '1d'
+            or not self.signal_on_closed_bar or self.trailing_enabled
+            or self.trend_filter_enabled
+        ):
+            raise ValueError('Daily policy requires closed-bar daily Donchian without extra gates or trailing')
+        if self.daily_policy_enabled and self.ohlcv_limit < max(self.donchian_entry_period, self.donchian_exit_period) + 1:
+            raise ValueError('Daily policy needs enough channel history')
         if self.fast_period >= self.slow_period:
             raise ValueError("strategy.fast_period must be < slow_period")
         return self

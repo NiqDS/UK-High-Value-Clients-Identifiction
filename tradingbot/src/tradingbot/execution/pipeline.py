@@ -68,6 +68,7 @@ class TradingPipeline:
         posture_provider: PostureProvider | None = None,
         health: HealthGate | None = None,
         emergency_alert: AlertHook | None = None,
+        entry_claim=None,
     ) -> None:
         self.config = config
         self.engine = engine
@@ -77,6 +78,7 @@ class TradingPipeline:
         self.posture_provider = posture_provider
         self.health = health
         self.emergency_alert = emergency_alert
+        self.entry_claim = entry_claim
         # Slow cycle/regime risk-budget multiplier, updated externally (the runner
         # refreshes it daily). 1.0 = neutral. Applied to entry size.
         self.regime_multiplier = 1.0
@@ -137,6 +139,10 @@ class TradingPipeline:
                 return PipelineResult(intent, decision, Outcome.REJECTED_BY_APPROVAL)
 
         if snapshot.ticker is None:
+            return PipelineResult(intent, decision, Outcome.NOT_EXECUTED)
+
+        if intent.is_entry and self.entry_claim is not None and not self.entry_claim(intent):
+            logger.warning('Daily entry already claimed: %s', intent.client_order_id)
             return PipelineResult(intent, decision, Outcome.NOT_EXECUTED)
 
         result = await self.executor.execute(
