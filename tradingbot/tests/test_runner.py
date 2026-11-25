@@ -263,6 +263,7 @@ async def test_cancel_stale_orders_skipped_in_paper(tmp_path) -> None:
 
 async def test_equity_cached_within_pass_and_invalidated_on_fill(tmp_path) -> None:
     runner, _, _ = build(tmp_path, BuyOnceStrategy())
+    runner.cfg.app.dry_run = False  # Only live mode reads the private balance.
     calls = {"n": 0}
 
     class _BalClient(_FakeClient):

@@ -15,7 +15,8 @@ from .adapter import ExchangeAdapter
 logger = logging.getLogger(__name__)
 
 
-def build_adapter(exchange_cfg: ExchangeConfig, secrets: Secrets) -> ExchangeAdapter:
+def build_adapter(exchange_cfg: ExchangeConfig, secrets: Secrets, *,
+                  public_only: bool = False) -> ExchangeAdapter:
     """Construct an :class:`ExchangeAdapter` backed by a real ccxt async client.
 
     Honours the sandbox flag, the rate limiter, and request timeout. Registers
@@ -28,9 +29,9 @@ def build_adapter(exchange_cfg: ExchangeConfig, secrets: Secrets) -> ExchangeAda
     if not hasattr(ccxt, name):
         raise ValueError(f"Unknown ccxt exchange id: {exchange_cfg.name!r}")
 
-    api_key = secrets.exchange_api_key.get_secret_value()
-    api_secret = secrets.exchange_api_secret.get_secret_value()
-    api_password = secrets.exchange_api_password.get_secret_value()
+    api_key = "" if public_only else secrets.exchange_api_key.get_secret_value()
+    api_secret = "" if public_only else secrets.exchange_api_secret.get_secret_value()
+    api_password = "" if public_only else secrets.exchange_api_password.get_secret_value()
     for value in (api_key, api_secret, api_password):
         register_secret(value)
 

@@ -719,13 +719,16 @@ def _build_runner(settings: Settings):
 
     # persistence: apply saved runtime overrides, then build the SQLite store
     from .approval.controls import JsonOverrideStore
-    JsonOverrideStore("runtime_overrides.json").apply(cfg)
+    from .app.runtime_state import runtime_state_dir
+    state_dir = runtime_state_dir(cfg.app.db_url, cfg.app.dry_run)
+    overrides_path = state_dir / "runtime_overrides.json"
+    JsonOverrideStore(overrides_path).apply(cfg)
     sf = make_session_factory(cfg.app.db_url)
     store = SqliteRiskStateStore(sf, daily_reset_utc_hour=cfg.risk.daily_reset_utc_hour)
     trade_log = TradeLog(sf)
     decision_log = DecisionLog(sf)
 
-    adapter = build_adapter(cfg.exchange, settings.secrets)
+    adapter = build_adapter(cfg.exchange, settings.secrets, public_only=cfg.app.dry_run)
     strategy = build_strategy(cfg.strategy)
     engine = RiskEngine(cfg, store)
     broker = PaperBroker(cfg.fees) if cfg.app.dry_run else LiveBroker(adapter)
@@ -737,7 +740,7 @@ def _build_runner(settings: Settings):
     # positions survive restarts: a forgotten open position would have no stop
     # and no exit, and the next signal would re-buy on top of it
     from .app.portfolio import JsonPositionStore
-    position_store = JsonPositionStore("data/positions.json")
+    position_store = JsonPositionStore(state_dir / "positions.json", strict=not cfg.app.dry_run)
     portfolio = position_store.load()
     reporter = WeeklyReporter(trade_log)
     email_sender = build_email_sender(cfg.reporting, settings.secrets)
@@ -761,6 +764,8 @@ def _build_runner(settings: Settings):
         from .approval.telegram_bot import TelegramApprovalBot
 
         async def balance_provider():
+            if cfg.app.dry_run:
+                return await runner._equity_free()
             bal = await adapter.fetch_balance()
             q = cfg.exchange.quote_currency
             return bal.total(q), bal.free(q)
@@ -768,7 +773,7 @@ def _build_runner(settings: Settings):
         status = StatusReporter(cfg, store, kill_switch=kill_switch, event_module=event_module,
                                 balance_provider=balance_provider)
         controls = SettingsController(cfg, store, kill_switch=kill_switch,
-                                      overrides=JsonOverrideStore("runtime_overrides.json"))
+                                      overrides=JsonOverrideStore(overrides_path))
         bot_holder: dict = {}
         manager = ApprovalManager(_LazyNotifier(bot_holder), cfg.telegram.approval_timeout_seconds)
 

@@ -55,7 +55,9 @@ def test_no_effect_verdict_when_near_not_worse() -> None:
 
 
 def test_shipped_calendar_parses() -> None:
-    events = load_calendar_csv("calendars/macro_events.csv")
+    from pathlib import Path
+    calendar = Path(__file__).resolve().parents[1] / "calendars/macro_events.csv"
+    events = load_calendar_csv(calendar)
     assert len(events) >= 40
     assert all(e.name == "FOMC" for e in events)
     # spans the backtest window

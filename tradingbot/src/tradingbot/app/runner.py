@@ -23,6 +23,10 @@ from .portfolio import Position, PositionTracker
 
 logger = logging.getLogger(__name__)
 
+class AccountStateUnavailable(RuntimeError):
+    """Live account state cannot safely authorize new exposure."""
+
+
 _TF_MS = {"m": 60_000, "h": 3_600_000, "d": 86_400_000, "w": 604_800_000}
 
 
@@ -149,27 +153,17 @@ class TradingRunner:
                 and _time.monotonic() - self._equity_cache_mono < 30.0):
             return self._equity_cache
         quote = self.cfg.exchange.quote_currency
-        result: tuple[float, float] | None = None
-        # PAPER (dry-run): size off the configured paper_equity, NOT the real
-        # wallet — even when credentials are present. The keys are here only to
-        # read PUBLIC market data; the real balance may be 0 (nothing deposited
-        # yet), and reading that 0 would breach the floor and HALT trading,
-        # starving the paper run. No real orders are placed in dry-run, so the
-        # simulated equity is the correct sizing basis.
-        if self.cfg.app.dry_run and self.cfg.app.paper_equity > 0:
-            sim = self.cfg.app.paper_equity
-            result = (sim, sim)
-        elif self.settings.secrets.has_exchange_credentials:
+        if self.cfg.app.dry_run:
+            simulated = self.cfg.app.paper_equity or self.cfg.risk.floor_quote * 3
+            result = (simulated, simulated)
+        else:
+            if not self.settings.secrets.has_exchange_credentials:
+                raise AccountStateUnavailable("Live credentials are missing")
             try:
                 bal = await self.adapter.fetch_balance()
                 result = (bal.total(quote), bal.free(quote))
-            except Exception:
-                logger.exception("fetch_balance failed; using simulated equity")
-        if result is None:
-            # No credentials (paper run): size off the configured paper_equity so
-            # sleeves match the intended real capital; floor*3 if unset.
-            simulated = self.cfg.app.paper_equity or self.cfg.risk.floor_quote * 3
-            result = (simulated, simulated)
+            except Exception as exc:
+                raise AccountStateUnavailable("Live account balance unavailable") from exc
         self._equity_cache = result
         self._equity_cache_mono = _time.monotonic()
         return result
@@ -189,26 +183,36 @@ class TradingRunner:
         in paper/dry-run the exchange balance is the user's real wallet and must
         NOT be adopted as bot positions.
         """
-        if self.cfg.app.dry_run or not self.settings.secrets.has_exchange_credentials:
+        if self.cfg.app.dry_run:
             return
+        if not self.settings.secrets.has_exchange_credentials:
+            raise AccountStateUnavailable('Cannot reconcile live positions without credentials')
         now = now or datetime.now(timezone.utc)
         try:
             bal = await self.adapter.fetch_balance()
-        except Exception:
-            logger.exception("reconcile: fetch_balance failed — starting with the persisted "
-                             "tracker UNVERIFIED; positions may be stale")
-            return
+        except Exception as exc:
+            raise AccountStateUnavailable('Startup balance reconciliation failed') from exc
+
+        # Validate the complete snapshot before mutating any tracked position.
+        # A missing/zero ticker must never turn a genuine holding into a phantom.
+        import math
+        observed = []
+        for symbol in self.cfg.exchange.symbols_allowlist:
+            units = bal.total(symbol.split('/')[0])
+            try:
+                ticker = await self.adapter.fetch_ticker(symbol)
+                price = ticker.last
+            except Exception as exc:
+                raise AccountStateUnavailable(f'Startup ticker unavailable for {symbol}') from exc
+            if (price is None or not math.isfinite(price) or price <= 0
+                    or not math.isfinite(units) or units < 0):
+                raise AccountStateUnavailable(f'Invalid startup market/account data for {symbol}')
+            observed.append((symbol, units, price))
 
         min_notional = self.cfg.risk.min_notional_per_trade_quote
         changed = False
-        for symbol in self.cfg.exchange.symbols_allowlist:
+        for symbol, ex_units, price in observed:
             base = symbol.split("/")[0]
-            ex_units = bal.total(base)
-            try:
-                price = (await self.adapter.fetch_ticker(symbol)).last or 0.0
-            except Exception:
-                logger.exception("reconcile: ticker fetch failed for %s — skipping", symbol)
-                continue
             ex_value = ex_units * price
             pos = self.portfolio.get(symbol)
 
@@ -279,7 +283,12 @@ class TradingRunner:
         intents += self._tp_stop_exits(symbol, ticker.last)
         intents = self._normalize_exits(symbol, intents)
 
-        equity, free = await self._equity_free()
+        try:
+            equity, free = await self._equity_free()
+        except AccountStateUnavailable:
+            logger.exception("Account state unavailable: blocking entries; allowing known exits")
+            intents = [intent for intent in intents if not intent.is_entry]
+            equity, free = 0.0, 0.0
         snapshot = AccountSnapshot(
             equity_quote=equity, free_quote=free, open_positions=len(self.portfolio.positions),
             open_orders=open_orders, unrealized_pnl_quote=self._unrealized_pnl(),
@@ -331,9 +340,10 @@ class TradingRunner:
             return 0
         try:
             orders = await self.adapter.fetch_open_orders(symbol)
-        except Exception:
-            logger.exception("fetch_open_orders failed for %s", symbol)
-            return 0
+        except Exception as exc:
+            raise AccountStateUnavailable(
+                f'Open orders unavailable for {symbol}; no new submission is safe'
+            ) from exc
         remaining = 0
         for o in orders:
             cid = str(o.get("clientOrderId")
@@ -343,9 +353,10 @@ class TradingRunner:
                 logger.warning("%s: cancelling stale bot order %s (%s)", symbol, oid, cid)
                 try:
                     await self.adapter.cancel_order(str(oid), symbol)
-                except Exception:
-                    logger.exception("cancel failed for %s", oid)
-                    remaining += 1
+                except Exception as exc:
+                    raise AccountStateUnavailable(
+                        f'Cancellation outcome unknown for {symbol}; reconcile before submission'
+                    ) from exc
             else:
                 remaining += 1
         return remaining
@@ -632,35 +643,35 @@ class TradingRunner:
     async def run(self) -> None:
         from .self_check import trade_only_key_self_check
 
-        safe = await trade_only_key_self_check(self.adapter)
-        if not safe and not self.cfg.app.dry_run:
-            logger.error("Refusing to start LIVE with a withdrawal-capable key.")
-            return
-        await self.adapter.load_markets()
-        # verify the persisted tracker against reality BEFORE trading (double-buy /
-        # phantom-exit protection after a crash or an out-of-band fill)
-        await self.reconcile_positions()
-
         tasks: list[asyncio.Task] = []
-        if self.health is not None:
-            async def ping() -> None:
-                await self.adapter.fetch_ticker(self.cfg.exchange.symbols_allowlist[0])
-            tasks.append(asyncio.create_task(self.health.run(ping, self._stop)))
-
-        interval = self.cfg.app.heartbeat_interval_seconds
-        rep = self.cfg.reporting
-        next_report = (
-            next_report_time(datetime.now(timezone.utc), rep.weekly_day, rep.weekly_hour_utc)
-            if rep.weekly_enabled else None
-        )
-        next_monthly = (
-            next_monthly_time(datetime.now(timezone.utc), rep.monthly_day, rep.monthly_hour_utc)
-            if rep.monthly_enabled else None
-        )
-        logger.info("Runner started (dry_run=%s, symbols=%s); next weekly: %s; next monthly: %s",
-                    self.cfg.app.dry_run, self.cfg.exchange.symbols_allowlist,
-                    next_report, next_monthly)
         try:
+            safe = True if self.cfg.app.dry_run else await trade_only_key_self_check(self.adapter)
+            if not safe and not self.cfg.app.dry_run:
+                logger.error("Refusing to start LIVE with a withdrawal-capable key.")
+                return
+            await self.adapter.load_markets()
+            # verify the persisted tracker against reality BEFORE trading (double-buy /
+            # phantom-exit protection after a crash or an out-of-band fill)
+            await self.reconcile_positions()
+
+            if self.health is not None:
+                async def ping() -> None:
+                    await self.adapter.fetch_ticker(self.cfg.exchange.symbols_allowlist[0])
+                tasks.append(asyncio.create_task(self.health.run(ping, self._stop)))
+
+            interval = self.cfg.app.heartbeat_interval_seconds
+            rep = self.cfg.reporting
+            next_report = (
+                next_report_time(datetime.now(timezone.utc), rep.weekly_day, rep.weekly_hour_utc)
+                if rep.weekly_enabled else None
+            )
+            next_monthly = (
+                next_monthly_time(datetime.now(timezone.utc), rep.monthly_day, rep.monthly_hour_utc)
+                if rep.monthly_enabled else None
+            )
+            logger.info("Runner started (dry_run=%s, symbols=%s); next weekly: %s; next monthly: %s",
+                        self.cfg.app.dry_run, self.cfg.exchange.symbols_allowlist,
+                        next_report, next_monthly)
             while not self._stop.is_set():
                 for symbol in self.cfg.exchange.symbols_allowlist:
                     try:
@@ -683,5 +694,7 @@ class TradingRunner:
         finally:
             for t in tasks:
                 t.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             await self.adapter.close()
             logger.info("Runner stopped.")

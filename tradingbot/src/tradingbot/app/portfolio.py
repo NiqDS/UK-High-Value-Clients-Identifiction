@@ -74,11 +74,12 @@ class PositionTracker:
 
 class JsonPositionStore:
     """Persist the tracker to a JSON file (atomic replace) so open positions
-    survive restarts. Load errors degrade to an empty tracker with a LOUD
-    warning — better to know than to silently trade against phantom state."""
+    survive restarts. Strict mode refuses corrupt live state. The default
+    retains the permissive loader for paper tools and backwards compatibility."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, strict: bool = False) -> None:
         self._path = Path(path)
+        self._strict = strict
 
     def load(self) -> PositionTracker:
         tracker = PositionTracker()
@@ -103,7 +104,9 @@ class JsonPositionStore:
                     ", ".join(f"{p.symbol}={p.units:.8f}@{p.entry_price:.4f}"
                               for p in tracker.positions.values()),
                 )
-        except Exception:
+        except Exception as exc:
+            if self._strict:
+                raise ValueError(f'Invalid live position store {self._path}; recovery required') from exc
             logger.exception(
                 "CORRUPT position store %s — starting with an EMPTY tracker. If the "
                 "bot holds real positions, STOP and reconcile manually before trading.",

@@ -115,7 +115,7 @@ def test_cli_rejects_momentum_without_top_k() -> None:
         [sys.executable, "-m", "tradingbot", "portfolio",
          "--asset", "X=nonexistent.csv", "--momentum", "60"],
         capture_output=True, text=True,
-        cwd="/home/user/UK-High-Value-Clients-Identifiction/tradingbot",
+        cwd=str(__import__('pathlib').Path(__file__).resolve().parents[1]),
     )
     assert proc.returncode == 2
     assert "--momentum and --top-k must be set together" in proc.stderr + proc.stdout
