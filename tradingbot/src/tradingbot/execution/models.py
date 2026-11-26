@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -16,6 +16,7 @@ class LiquidityRole(str, Enum):
 
 class ExecStatus(str, Enum):
     FILLED = "filled"
+    PARTIAL = "partial"
     OPEN = "open"  # resting (live maker order not yet filled)
     REJECTED = "rejected"  # execution-layer guard rejected (e.g. slippage, taker not allowed)
     SKIPPED = "skipped"
@@ -31,6 +32,9 @@ class Order:
     role: LiquidityRole
     price: float | None  # limit price (None => pure market)
     reference_price: float  # mid/decision price used for slippage accounting
+    stop_price: float | None = None
+    take_profit_price: float | None = None
+    reason: str = ""
 
 
 @dataclass
@@ -59,10 +63,12 @@ class ExecutionResult:
     fill: Fill | None = None
     reason: str = ""
     exchange_order_id: str | None = None
+    accounted: bool = False
+    receipts: list[dict] = field(default_factory=list)
 
     @property
     def filled(self) -> bool:
-        return self.status is ExecStatus.FILLED
+        return self.status in (ExecStatus.FILLED, ExecStatus.PARTIAL)
 
 
 def utcnow() -> datetime:

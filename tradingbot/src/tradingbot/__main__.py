@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from pathlib import Path
 
 from .config import Settings, load_settings
 from .logging_setup import setup_logging
@@ -103,6 +104,8 @@ async def _paper_run(settings: Settings) -> int:
     from .strategy import MarketData, build_strategy
 
     cfg = settings.config
+    if cfg.strategy.daily_policy_enabled:
+        raise RuntimeError('Daily policy requires the persistent run command, not the paper demo')
     store = InMemoryRiskStateStore(daily_reset_utc_hour=cfg.risk.daily_reset_utc_hour)
     engine = RiskEngine(cfg, store)
     executor = Executor(cfg, PaperBroker(cfg.fees))  # paper only — never live here
@@ -716,19 +719,48 @@ def _build_runner(settings: Settings):
     from .strategy import build_strategy
 
     cfg = settings.config
+    if not cfg.app.dry_run:
+        raise RuntimeError('Live mode blocked: daily safety integration and venue protection tests are pending')
+    if not cfg.app.trading_enabled:
+        raise RuntimeError('Trading disabled by configuration')
+    if not cfg.strategy.daily_policy_enabled:
+        raise RuntimeError('Persistent service requires the daily policy profile')
 
     # persistence: apply saved runtime overrides, then build the SQLite store
     from .approval.controls import JsonOverrideStore
-    JsonOverrideStore("runtime_overrides.json").apply(cfg)
+    from .app.runtime_state import runtime_state_dir
+    state_dir = runtime_state_dir(cfg.app.db_url, cfg.app.dry_run)
+    overrides_path = state_dir / "runtime_overrides.json"
+    JsonOverrideStore(overrides_path).apply(cfg)
+    if not cfg.app.dry_run:
+        raise RuntimeError('Live mode blocked: saved overrides cannot enable this safety build')
+    if not cfg.app.trading_enabled:
+        raise RuntimeError('Trading disabled by saved configuration')
+    if not cfg.strategy.daily_policy_enabled:
+        raise RuntimeError('Saved settings cannot disable the daily policy')
+    if runtime_state_dir(cfg.app.db_url,cfg.app.dry_run)!=state_dir:
+        raise RuntimeError('Saved settings cannot change the state namespace')
     sf = make_session_factory(cfg.app.db_url)
     store = SqliteRiskStateStore(sf, daily_reset_utc_hour=cfg.risk.daily_reset_utc_hour)
     trade_log = TradeLog(sf)
     decision_log = DecisionLog(sf)
 
-    adapter = build_adapter(cfg.exchange, settings.secrets)
+
     strategy = build_strategy(cfg.strategy)
     engine = RiskEngine(cfg, store)
-    broker = PaperBroker(cfg.fees) if cfg.app.dry_run else LiveBroker(adapter)
+    journal = None
+    if cfg.strategy.daily_policy_enabled:
+        from sqlalchemy.engine import make_url
+        from .store.journal import Journal
+        from .execution.journal_broker import JournalBroker, PaperVenue
+        if (state_dir / 'positions.json').exists():
+            raise RuntimeError('JSON paper state needs explicit journal migration')
+        journal = Journal(make_url(cfg.app.db_url).database,
+                          cfg.app.paper_equity or cfg.risk.floor_quote * 3,
+                          cfg.exchange.quote_currency,cfg.risk.daily_reset_utc_hour)
+        broker = JournalBroker(journal, PaperVenue(cfg.fees,cfg.exchange.quote_currency))
+    else:
+        broker = PaperBroker(cfg.fees) if cfg.app.dry_run else LiveBroker(adapter)
     executor = Executor(cfg, broker)
     event_module = EventRiskModule(cfg.events, EventCalendar.from_config(cfg.events))
     kill_switch = KillSwitch(cfg.kill_switch)
@@ -737,9 +769,12 @@ def _build_runner(settings: Settings):
     # positions survive restarts: a forgotten open position would have no stop
     # and no exit, and the next signal would re-buy on top of it
     from .app.portfolio import JsonPositionStore
-    position_store = JsonPositionStore("data/positions.json")
-    portfolio = position_store.load()
-    reporter = WeeklyReporter(trade_log)
+    position_store = JsonPositionStore(state_dir / "positions.json",
+                                      strict=not cfg.app.dry_run or cfg.strategy.daily_policy_enabled)
+    portfolio = journal.snapshot() if journal is not None else position_store.load()
+    if journal is not None:
+        position_store = None
+    reporter = WeeklyReporter(trade_log, net_accounting=journal is not None)
     email_sender = build_email_sender(cfg.reporting, settings.secrets)
     from .regime.cycle import CycleRegimeOverlay
     regime_overlay = CycleRegimeOverlay(cfg.regime) if cfg.regime.enabled else None
@@ -761,6 +796,8 @@ def _build_runner(settings: Settings):
         from .approval.telegram_bot import TelegramApprovalBot
 
         async def balance_provider():
+            if cfg.app.dry_run:
+                return await runner._equity_free()
             bal = await adapter.fetch_balance()
             q = cfg.exchange.quote_currency
             return bal.total(q), bal.free(q)
@@ -768,7 +805,7 @@ def _build_runner(settings: Settings):
         status = StatusReporter(cfg, store, kill_switch=kill_switch, event_module=event_module,
                                 balance_provider=balance_provider)
         controls = SettingsController(cfg, store, kill_switch=kill_switch,
-                                      overrides=JsonOverrideStore("runtime_overrides.json"))
+                                      overrides=JsonOverrideStore(overrides_path))
         bot_holder: dict = {}
         manager = ApprovalManager(_LazyNotifier(bot_holder), cfg.telegram.approval_timeout_seconds)
 
@@ -855,6 +892,8 @@ def _build_runner(settings: Settings):
     pipeline = TradingPipeline(cfg, engine, executor, store, approver=approver,
                                posture_provider=posture, health=health,
                                emergency_alert=emergency_alert)
+
+    adapter = build_adapter(cfg.exchange, settings.secrets, public_only=cfg.app.dry_run)
     runner = TradingRunner(
         settings=settings, adapter=adapter, pipeline=pipeline, strategy=strategy,
         store=store, trade_log=trade_log, portfolio=portfolio, kill_switch=kill_switch,
@@ -864,6 +903,29 @@ def _build_runner(settings: Settings):
         email_sender=email_sender, regime_overlay=regime_overlay,
         position_store=position_store, decision_log=decision_log,
     )
+    runner.journal = journal
+    if journal is not None:
+        journal.clock = lambda: runner.clock()
+    if journal is not None:
+        from .app.instance_lock import InstanceLock
+        from sqlalchemy.engine import make_url
+        runner.instance_lock = InstanceLock(str(Path(make_url(cfg.app.db_url).database).resolve())+'.lock')
+        async def fresh_snapshot(symbol,now):
+            from .risk.engine import AccountSnapshot
+            from .strategy.daily_policy import finite
+            from datetime import datetime, timezone
+            now=runner.clock()
+            runner._equity_cache = None
+            equity,free = await runner._equity_free()
+            ticker = await adapter.fetch_ticker(symbol)
+            finite(ticker.bid,positive=True)
+            finite(ticker.ask,positive=True)
+            return AccountSnapshot(equity_quote=equity,free_quote=free,
+                                   open_positions=len(runner.portfolio.positions),ticker=ticker,now=now,
+                                   open_orders=len(journal.pending()),
+                                   market_min_notional_quote=adapter.market_min_cost(symbol),
+                                   unrealized_pnl_quote=journal.day_change(now,equity)-store.get_daily_counters(now).realized_pnl)
+        pipeline.snapshot_provider = fresh_snapshot
     return runner, bot, signal
 
 

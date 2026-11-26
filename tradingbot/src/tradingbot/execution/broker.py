@@ -70,63 +70,11 @@ class PaperBroker:
 
 
 class LiveBroker:
-    """Places real orders via the exchange adapter. Not exercised in dry-run."""
+    """There is no certified Bybit EU live adapter in this build.
 
-    def __init__(self, adapter) -> None:  # adapter: ExchangeAdapter
-        self._adapter = adapter
-        self._submitted: set[str] = set()
+    The durable venue protocol is tested through JournalBroker with fake venues.
+    Do not restore the old acknowledgement-based live path.
+    """
 
-    async def place_order(self, order: Order) -> ExecutionResult:
-        if order.client_order_id in self._submitted:
-            logger.warning("LiveBroker: %s already submitted; skipping", order.client_order_id)
-            return ExecutionResult(ExecStatus.SKIPPED, order, reason="duplicate client_order_id")
-
-        ccxt_type = "market" if order.order_type is OrderType.MARKET else "limit"
-        raw = await self._adapter.create_order(
-            symbol=order.symbol,
-            order_type=ccxt_type,
-            side=order.side.value,
-            amount=order.amount,
-            price=order.price,
-            client_order_id=order.client_order_id,
-        )
-        self._submitted.add(order.client_order_id)
-
-        status = ExecStatus.OPEN
-        fill = None
-        if (raw.get("status") == "closed") or raw.get("filled"):
-            avg = raw.get("average") or raw.get("price") or order.price or order.reference_price
-            amount = float(raw.get("filled") or order.amount)
-            fee_info = raw.get("fee") or {}
-            fee_cost = float(fee_info.get("cost") or 0.0)
-            fee_ccy = str(fee_info.get("currency") or "").upper()
-            base_ccy = order.symbol.split("/")[0].upper()
-            fee_quote = fee_cost
-            # Venues like Bybit deduct BUY fees from the RECEIVED base coin: the
-            # account holds filled - fee, not filled. Track the NET units or the
-            # eventual exit oversells and is rejected for insufficient balance.
-            if order.side is Side.BUY and fee_ccy == base_ccy and fee_cost > 0:
-                amount -= fee_cost
-                fee_quote = fee_cost * float(avg)  # report the fee in quote terms
-            fill = Fill(
-                client_order_id=order.client_order_id,
-                symbol=order.symbol,
-                side=order.side,
-                price=float(avg),
-                amount=amount,
-                fee_quote=fee_quote,
-                role=order.role,
-                cost_quote=float(avg) * amount,
-                timestamp=utcnow(),
-            )
-            status = ExecStatus.FILLED
-        return ExecutionResult(status=status, order=order, fill=fill,
-                               exchange_order_id=str(raw.get("id")) if raw.get("id") else None)
-
-    async def cancel_order(self, client_order_id: str, symbol: str) -> bool:
-        try:
-            await self._adapter.cancel_order(client_order_id, symbol)
-            return True
-        except Exception:
-            logger.exception("LiveBroker: cancel failed for %s", client_order_id)
-            return False
+    def __init__(self, adapter) -> None:
+        raise RuntimeError('Live execution blocked: no certified durable venue/protection adapter')

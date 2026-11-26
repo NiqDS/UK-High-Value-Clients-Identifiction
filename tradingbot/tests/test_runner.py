@@ -263,6 +263,7 @@ async def test_cancel_stale_orders_skipped_in_paper(tmp_path) -> None:
 
 async def test_equity_cached_within_pass_and_invalidated_on_fill(tmp_path) -> None:
     runner, _, _ = build(tmp_path, BuyOnceStrategy())
+    runner.cfg.app.dry_run = False  # Only live mode reads the private balance.
     calls = {"n": 0}
 
     class _BalClient(_FakeClient):
@@ -337,33 +338,17 @@ def _live(runner):
         _env_file=None, exchange_api_key="k", exchange_api_secret="s")
 
 
-async def test_reconcile_adopts_untracked_exchange_holding(tmp_path) -> None:
-    runner, _, portfolio = build(tmp_path, BuyOnceStrategy())
+@pytest.mark.parametrize('venue,tracked',[(0.5,0),(0,0.4),(0.3,0.4),(0.00001,0)])
+async def test_reconcile_mismatch_requires_verified_history(tmp_path,venue,tracked):
+    from tradingbot.app.runner import AccountStateUnavailable
+    runner,_,portfolio=build(tmp_path,BuyOnceStrategy())
     _live(runner)
-    runner.adapter = ExchangeAdapter(_ReconcileClient({"BTC": 0.5}, price=100.0))  # 50 USD
-    assert not portfolio.holding("BTC/USD")
-    await runner.reconcile_positions(now=NOW)
-    assert portfolio.holding("BTC/USD")                       # adopted
-    assert portfolio.get("BTC/USD").units == pytest.approx(0.5)
-    assert portfolio.get("BTC/USD").entry_price == pytest.approx(100.0)
-
-
-async def test_reconcile_drops_phantom_position(tmp_path) -> None:
-    runner, _, portfolio = build(tmp_path, BuyOnceStrategy())
-    _live(runner)
-    portfolio.on_fill("BTC/USD", Side.BUY, 100.0, 0.4, NOW)    # tracker thinks it holds
-    runner.adapter = ExchangeAdapter(_ReconcileClient({"BTC": 0.0}, price=100.0))  # venue: none
-    await runner.reconcile_positions(now=NOW)
-    assert not portfolio.holding("BTC/USD")                   # phantom dropped
-
-
-async def test_reconcile_adopts_exchange_units_on_drift(tmp_path) -> None:
-    runner, _, portfolio = build(tmp_path, BuyOnceStrategy())
-    _live(runner)
-    portfolio.on_fill("BTC/USD", Side.BUY, 100.0, 0.40, NOW)
-    runner.adapter = ExchangeAdapter(_ReconcileClient({"BTC": 0.30}, price=100.0))  # venue less
-    await runner.reconcile_positions(now=NOW)
-    assert portfolio.get("BTC/USD").units == pytest.approx(0.30)  # exchange is truth
+    if tracked:
+        portfolio.on_fill('BTC/USD',Side.BUY,100,tracked,NOW,stop=90)
+    runner.adapter=ExchangeAdapter(_ReconcileClient({'BTC':venue},price=100))
+    with pytest.raises(AccountStateUnavailable,match='Inventory mismatch'):
+        await runner.reconcile_positions(now=NOW)
+    assert (portfolio.get('BTC/USD').units if tracked else 0)==tracked
 
 
 async def test_reconcile_noop_in_paper_mode(tmp_path) -> None:
@@ -372,15 +357,6 @@ async def test_reconcile_noop_in_paper_mode(tmp_path) -> None:
     runner.adapter = ExchangeAdapter(_ReconcileClient({"BTC": 5.0}, price=100.0))
     await runner.reconcile_positions(now=NOW)
     assert not portfolio.holding("BTC/USD")                   # untouched
-
-
-async def test_reconcile_ignores_dust_holding(tmp_path) -> None:
-    runner, _, portfolio = build(tmp_path, BuyOnceStrategy())
-    _live(runner)
-    # 0.00001 BTC * 100 = 0.001 USD, below min_notional_per_trade_quote default
-    runner.adapter = ExchangeAdapter(_ReconcileClient({"BTC": 0.00001}, price=100.0))
-    await runner.reconcile_positions(now=NOW)
-    assert not portfolio.holding("BTC/USD")                   # dust ignored
 
 
 async def test_paper_equity_overrides_synthetic_fallback(tmp_path) -> None:

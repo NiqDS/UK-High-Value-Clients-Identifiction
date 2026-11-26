@@ -31,11 +31,13 @@ class Position:
     take_profit: float | None = None
     stop: float | None = None
     trail_distance: float | None = None
+    cost_basis: float | None = None
 
 
 @dataclass
 class PositionTracker:
     positions: dict[str, Position] = field(default_factory=dict)
+    cash_quote: float | None = None
 
     def holding(self, symbol: str) -> bool:
         return symbol in self.positions
@@ -74,11 +76,12 @@ class PositionTracker:
 
 class JsonPositionStore:
     """Persist the tracker to a JSON file (atomic replace) so open positions
-    survive restarts. Load errors degrade to an empty tracker with a LOUD
-    warning — better to know than to silently trade against phantom state."""
+    survive restarts. Strict mode refuses corrupt live state. The default
+    retains the permissive loader for paper tools and backwards compatibility."""
 
-    def __init__(self, path: str | Path) -> None:
+    def __init__(self, path: str | Path, *, strict: bool = False) -> None:
         self._path = Path(path)
+        self._strict = strict
 
     def load(self) -> PositionTracker:
         tracker = PositionTracker()
@@ -86,16 +89,32 @@ class JsonPositionStore:
             return tracker
         try:
             data = json.loads(self._path.read_text())
+            if not isinstance(data,dict) or not isinstance(data.get('positions',[]),list):
+                raise ValueError('Invalid position document')
+            tracker.cash_quote = data.get('cash_quote')
+            if tracker.cash_quote is not None:
+                import math
+                if not math.isfinite(tracker.cash_quote) or tracker.cash_quote < 0:
+                    raise ValueError('Invalid saved cash')
             for row in data.get("positions", []):
                 pos = Position(
                     symbol=row["symbol"], units=float(row["units"]),
                     entry_price=float(row["entry_price"]),
                     entry_ts=datetime.fromisoformat(row["entry_ts"]),
                     take_profit=row.get("take_profit"), stop=row.get("stop"),
-                    trail_distance=row.get("trail_distance"),
+                    trail_distance=row.get("trail_distance"), cost_basis=row.get("cost_basis"),
                 )
-                if pos.units > 0:
-                    tracker.positions[pos.symbol] = pos
+                from ..strategy.daily_policy import finite
+                finite(pos.units, positive=True)
+                finite(pos.entry_price, positive=True)
+                if pos.entry_ts.tzinfo is None or pos.symbol in tracker.positions:
+                    raise ValueError('Invalid position time or duplicate symbol')
+                if not isinstance(pos.symbol,str) or '/' not in pos.symbol:
+                    raise ValueError('Invalid position symbol')
+                for value in [pos.stop,pos.take_profit,pos.trail_distance,pos.cost_basis]:
+                    if value is not None:
+                        finite(value,positive=True)
+                tracker.positions[pos.symbol] = pos
             if tracker.positions:
                 logger.warning(
                     "Rehydrated %d open position(s) from %s: %s",
@@ -103,7 +122,9 @@ class JsonPositionStore:
                     ", ".join(f"{p.symbol}={p.units:.8f}@{p.entry_price:.4f}"
                               for p in tracker.positions.values()),
                 )
-        except Exception:
+        except Exception as exc:
+            if self._strict:
+                raise ValueError(f'Invalid live position store {self._path}; recovery required') from exc
             logger.exception(
                 "CORRUPT position store %s — starting with an EMPTY tracker. If the "
                 "bot holds real positions, STOP and reconcile manually before trading.",
@@ -113,16 +134,28 @@ class JsonPositionStore:
 
     def save(self, tracker: PositionTracker) -> None:
         try:
+            from ..strategy.daily_policy import finite
+            if tracker.cash_quote is not None:
+                finite(tracker.cash_quote)
+            for pos in tracker.positions.values():
+                finite(pos.units,positive=True)
+                finite(pos.entry_price,positive=True)
+                if pos.entry_ts.tzinfo is None:
+                    raise ValueError('Position timestamp is not timezone-aware')
+                for value in [pos.stop,pos.take_profit,pos.trail_distance,pos.cost_basis]:
+                    if value is not None:
+                        finite(value,positive=True)
             self._path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
                 "saved_at": datetime.now(timezone.utc).isoformat(),
+                "cash_quote": tracker.cash_quote,
                 "positions": [
                     {
                         "symbol": p.symbol, "units": p.units,
                         "entry_price": p.entry_price,
                         "entry_ts": p.entry_ts.isoformat(),
                         "take_profit": p.take_profit, "stop": p.stop,
-                        "trail_distance": p.trail_distance,
+                        "trail_distance": p.trail_distance, "cost_basis": p.cost_basis,
                     }
                     for p in tracker.positions.values()
                 ],
@@ -130,5 +163,6 @@ class JsonPositionStore:
             tmp = self._path.with_suffix(".tmp")
             tmp.write_text(json.dumps(payload, indent=2))
             tmp.replace(self._path)  # atomic on POSIX
-        except Exception:  # persistence must never kill the trading loop
+        except Exception:
             logger.exception("could not save position state to %s", self._path)
+            raise

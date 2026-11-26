@@ -19,12 +19,13 @@ class TradeLog:
         cost_quote: float, fee_quote: float, role: str, is_entry: bool,
         realized_pnl: float = 0.0, reason: str = "", valuation_pct: float | None = None,
         client_order_id: str | None = None, risk_pct: float | None = None,
+        net_pnl: float | None = None,
     ) -> int:
         rec = TradeRecord(
             ts=ts, symbol=symbol, side=side, price=price, amount=amount,
             cost_quote=cost_quote, fee_quote=fee_quote, role=role, is_entry=is_entry,
             realized_pnl=realized_pnl, reason=reason, valuation_pct=valuation_pct,
-            client_order_id=client_order_id, risk_pct=risk_pct,
+            client_order_id=client_order_id, risk_pct=risk_pct, net_pnl=net_pnl,
         )
         with self._sf() as s:
             s.add(rec)

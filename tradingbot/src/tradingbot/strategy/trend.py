@@ -40,6 +40,9 @@ class DonchianBreakoutStrategy(Strategy):
         prior_high = max(c.high for c in candles[-n_entry - 1:-1])
         prior_low = min(c.low for c in candles[-n_exit - 1:-1])
         meta = {"donchian_high": prior_high, "donchian_low": prior_low}
+        if cfg.daily_policy_enabled:
+            meta.update(daily_policy=True, signal_bar_open=candles[-1].timestamp,
+                        signal_price=price)
 
         if market.holding:
             # Exit when price breaks below the lower channel (trend over).
@@ -71,9 +74,13 @@ class DonchianBreakoutStrategy(Strategy):
         # orders are exactly the failure mode the live review flagged). Requires
         # fees.allow_taker_fallback in live configs.
         if price > prior_high:
+            from .daily_policy import signal_identity
+            identity = (signal_identity(market.symbol, candles[-1].timestamp, n_entry, n_exit)
+                        if cfg.daily_policy_enabled else None)
             return [OrderIntent(
                 symbol=market.symbol, side=Side.BUY,
                 amount=cfg.target_notional_quote / price, order_type=OrderType.MARKET,
                 price=price, stop_price=min(prior_low, price * (1 - cfg.stop_loss_pct / 100.0)),
-                is_entry=True, reason="donchian breakout buy", metadata=meta)]
+                is_entry=True, reason="donchian breakout buy", metadata=meta,
+                client_order_id=identity)]
         return []

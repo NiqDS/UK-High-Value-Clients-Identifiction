@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 # Columns added to existing tables after their first release. create_all() only
 # creates MISSING tables, never alters existing ones, so a db from an earlier
 # version needs these back-filled (all nullable => a plain ADD COLUMN is safe).
-_ADDED_COLUMNS = {"trades": {"risk_pct": "FLOAT"}}
+_ADDED_COLUMNS = {"trades": {"risk_pct": "FLOAT", "net_pnl": "FLOAT"}}
 
 
 def _migrate(engine) -> None:
