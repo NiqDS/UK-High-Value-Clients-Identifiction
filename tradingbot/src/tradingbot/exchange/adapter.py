@@ -58,15 +58,47 @@ class ExchangeAdapter:
     def __init__(self, client: CcxtClient) -> None:
         self._client = client
         self._markets_loaded = False
+        self._markets = {}
 
     @property
     def id(self) -> str:
         return getattr(self._client, "id", "unknown")
 
     async def load_markets(self, reload: bool = False) -> None:
-        await self._client.load_markets(reload)
+        self._markets = await self._client.load_markets(reload)
         self._markets_loaded = True
         logger.info("Loaded markets for %s", self.id)
+
+    def validate_universe(self, symbols, quote):
+        from ..strategy.daily_policy import finite
+        for symbol in symbols:
+            market=self._markets.get(symbol)
+            if not market or market.get('active') is not True or market.get('spot') is not True:
+                raise ValueError(f'Market is not an active spot instrument: {symbol}')
+            if market.get('quote')!=quote:
+                raise ValueError('Market quote currency mismatch')
+            finite(market.get('limits',{}).get('cost',{}).get('min'),positive=True)
+            finite(market.get('precision',{}).get('amount'),positive=True)
+
+    def market_min_cost(self,symbol):
+        from ..strategy.daily_policy import finite
+        return finite(self._markets[symbol]['limits']['cost']['min'],positive=True)
+
+    def round_amount(self,symbol,amount):
+        from ..strategy.daily_policy import finite
+        if not self._markets_loaded or symbol not in self._markets:
+            raise ValueError('Market precision has not been loaded')
+        rounded=float(self._client.amount_to_precision(symbol,amount))
+        finite(rounded,positive=True)
+        if rounded>amount:
+            raise ValueError('Amount rounding increased exposure')
+        minimum=self._markets[symbol].get('limits',{}).get('amount',{}).get('min')
+        maximum=self._markets[symbol].get('limits',{}).get('amount',{}).get('max')
+        if minimum is not None and rounded<minimum:
+            raise ValueError('Amount is below the market minimum')
+        if maximum is not None and rounded>maximum:
+            raise ValueError('Amount exceeds the market maximum')
+        return rounded
 
     # ----- read-only market & account data --------------------------------
     async def fetch_balance(self) -> AccountBalance:
@@ -152,6 +184,16 @@ def _f(value: Any) -> float | None:
         return None
 
 
+def _balance_number(values,ccy):
+    if ccy not in values:
+        return 0.0
+    from ..strategy.daily_policy import finite
+    value=_f(values[ccy])
+    if value is None:
+        raise ValueError('Malformed account balance')
+    return finite(value)
+
+
 def _parse_balance(raw: dict[str, Any]) -> AccountBalance:
     free = raw.get("free", {}) or {}
     used = raw.get("used", {}) or {}
@@ -161,9 +203,9 @@ def _parse_balance(raw: dict[str, Any]) -> AccountBalance:
     for ccy in currencies:
         balances[ccy.upper()] = Balance(
             currency=ccy.upper(),
-            free=_f(free.get(ccy)) or 0.0,
-            used=_f(used.get(ccy)) or 0.0,
-            total=_f(total.get(ccy)) or 0.0,
+            free=_balance_number(free,ccy),
+            used=_balance_number(used,ccy),
+            total=_balance_number(total,ccy),
         )
     return AccountBalance(balances=balances)
 

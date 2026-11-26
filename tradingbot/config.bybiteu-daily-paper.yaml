@@ -1,0 +1,118 @@
+# Bybit EU public-data paper profile. No private credentials or real orders.
+# USDC listing is verified; account trading permissions and native stops are not certified.
+# Historical USDT returns do not certify this USDC profile.
+exchange:
+  name: bybiteu
+  sandbox: false
+  quote_currency: USDC
+  symbols_allowlist:
+  - BTC/USDC
+  - ETH/USDC
+  - BNB/USDC
+  - ADA/USDC
+  - AVAX/USDC
+  - DOGE/USDC
+  - TRX/USDC
+  enable_rate_limit: true
+  request_timeout_ms: 20000
+  use_threaded_dns: true
+  options:
+    defaultType: spot
+risk:
+  floor_quote: 10.0
+  floor_buffer_quote: 5.0
+  min_notional_per_trade_quote: 5.0
+  max_notional_per_trade_quote: 30.0
+  max_notional_per_trade_pct_equity: 15.0
+  per_trade_risk_pct: 15.0
+  max_open_positions: 7
+  max_concurrent_open_orders: 8
+  max_trades_per_day: 14
+  max_daily_traded_notional_quote: 206.0
+  max_daily_loss_quote: 28.0
+  daily_reset_utc_hour: 0
+fees:
+  maker_fee_pct: 0.1
+  taker_fee_pct: 0.1
+  pull_fee_tiers_from_exchange: true
+  round_trip_fee_safety_margin_pct: 0.2
+  maker_first: true
+  allow_taker_fallback: true
+  maker_offset_pct: 0.05
+  max_spread_pct: 0.3
+  max_slippage_pct: 0.2
+  require_take_profit: false
+strategy:
+  name: donchian_breakout
+  timeframe: 1d
+  ohlcv_limit: 120
+  target_notional_quote: 27.0
+  take_profit_pct: 1.5
+  stop_loss_pct: 1.0
+  vwap_filter_enabled: false
+  donchian_entry_period: 50
+  donchian_exit_period: 15
+  trend_filter_enabled: false
+  daily_policy_enabled: true
+  signal_on_closed_bar: true
+events:
+  enabled: false
+  timezone: UTC
+  pre_event_window_minutes: 60
+  post_event_window_minutes: 30
+  pause_entries: true
+  reduce_size_pct: 50.0
+  widen_maker_offset_pct: 0.1
+  tighten_stops: true
+  calendar: []
+  calendar_csv: ''
+  include_halvings: true
+kill_switch:
+  enabled: false
+  rolling_window_minutes: 30
+  price_velocity_ratio: 5.0
+  volume_spike_ratio: 8.0
+  cooldown_minutes: 1440
+  pull_resting_orders: true
+regime:
+  enabled: false
+funding:
+  enabled: false
+mvrv:
+  enabled: false
+learning:
+  enabled: false
+  bad_trades_dir: bad_trades
+  weekly: true
+  min_trades_per_bucket: 5
+  write_own_losers: true
+telegram:
+  enabled: true
+  require_approval: false
+  trade_alerts: true
+  label: DAILY
+  commands_enabled: true
+  approval_threshold_quote: 0.0
+  approval_timeout_seconds: 300
+  allowed_chat_ids: []
+reporting:
+  weekly_enabled: true
+  weekly_day: 0
+  weekly_hour_utc: 8
+  monthly_enabled: true
+  monthly_day: 1
+  monthly_hour_utc: 8
+  email_enabled: false
+  extra_report_dbs: []
+app:
+  dry_run: true
+  paper_equity: 206.0
+  trading_enabled: true
+  log_level: INFO
+  log_json: false
+  db_url: sqlite:///data/tradingbot_bybiteu_daily_v3_paper.db
+  heartbeat_interval_seconds: 60
+  max_api_latency_ms: 3000
+  max_consecutive_failures: 3
+  health_recovery_samples: 3
+  cancel_orders_on_suspend: true

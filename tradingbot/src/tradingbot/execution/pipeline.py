@@ -79,6 +79,7 @@ class TradingPipeline:
         self.health = health
         self.emergency_alert = emergency_alert
         self.entry_claim = entry_claim
+        self.snapshot_provider = None
         # Slow cycle/regime risk-budget multiplier, updated externally (the runner
         # refreshes it daily). 1.0 = neutral. Applied to entry size.
         self.regime_multiplier = 1.0
@@ -138,6 +139,18 @@ class TradingPipeline:
             if not approved:
                 return PipelineResult(intent, decision, Outcome.REJECTED_BY_APPROVAL)
 
+        if intent.is_entry and self.snapshot_provider is not None:
+            fresh = await self.snapshot_provider(intent.symbol,snapshot.now)
+            # Keep the already-sized units. A price increase must not escape its cap.
+            if intent.metadata.get('daily_policy'):
+                from ..strategy.daily_policy import DAY_MS
+                expected=(int(fresh.now.timestamp()*1000)//DAY_MS-1)*DAY_MS
+                if intent.metadata.get('signal_bar_open')!=expected:
+                    return PipelineResult(intent,decision,Outcome.NOT_EXECUTED)
+            decision=self.engine.evaluate(intent,fresh)
+            if not decision.approved:
+                return PipelineResult(intent,decision,Outcome.REJECTED_BY_RISK)
+            snapshot=fresh
         if snapshot.ticker is None:
             return PipelineResult(intent, decision, Outcome.NOT_EXECUTED)
 
@@ -148,6 +161,8 @@ class TradingPipeline:
         result = await self.executor.execute(
             intent, decision, snapshot.ticker, extra_maker_offset_pct=posture.widen_offset_pct
         )
+        if result.accounted:
+            return PipelineResult(intent, decision, Outcome.EXECUTED if result.receipts else Outcome.NOT_EXECUTED, result)
         if result.filled and result.fill is not None:
             # entries consume the daily trade/notional budget on a real fill
             if intent.is_entry:

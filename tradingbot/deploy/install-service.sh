@@ -3,19 +3,14 @@
 # Install + enable a systemd service so the bot runs 24/7 and restarts on
 # crash and on reboot. Run this AFTER setup-server.sh and AFTER creating .env.
 #
-# Usage (default = the 15m data-collection config):
-#     bash install-service.sh
-# Or pass a different config:
-#     bash install-service.sh config.bybit-live.yaml
-#
-# TWO BUCKETS side by side — pass a NAME suffix as the 2nd arg to run more than
-# one service concurrently (each needs its OWN db_url in its config):
-#     bash install-service.sh config.bybit-daily-paper.yaml  daily   # -> tradingbot-daily
-#     bash install-service.sh config.bybit-test-active.yaml  15m     # -> tradingbot-15m
+# Default: Bybit EU daily paper profile with a new USDC database.
+# This installer starts a service. Do not use it for isolated offline tests.
+# Use the offline test instructions in docs/AWS_OFFLINE_TEST.md first.
+# The four-hour profile is retired. Live startup is blocked in Python.
 # =============================================================================
 set -euo pipefail
 
-CONFIG="${1:-config.bybit-daily-paper.yaml}"
+CONFIG="${1:-config.bybiteu-daily-paper.yaml}"
 SUFFIX="${2:-}"
 case "$CONFIG:$SUFFIX" in
   *4h*|*4H*) echo "ERROR: the four-hour service is retired."; exit 1 ;;

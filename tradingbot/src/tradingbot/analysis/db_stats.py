@@ -49,8 +49,14 @@ def render_db_stats(
     entries = [t for t in trades if t.is_entry]
     exits = [t for t in trades if not t.is_entry]
     fees = sum(t.fee_quote for t in trades)
-    realized = sum(t.realized_pnl for t in exits)
-    wins = sum(1 for t in exits if t.realized_pnl > 0)
+    def profit(t):
+        value=getattr(t,'net_pnl',None)
+        return value if value is not None else t.realized_pnl
+    journal_mode=any(getattr(t,'net_pnl',None) is not None for t in trades)
+    realized = sum(profit(t) for t in exits)
+    net_total=realized if journal_mode else realized-fees
+    pnl_label='realized net' if journal_mode else 'gross of exit fee' 
+    wins = sum(1 for t in exits if profit(t) > 0)
     if not trades:
         lines.append("fills: none yet — no entries have filled.")
     else:
@@ -60,9 +66,9 @@ def render_db_stats(
             f"window:       {span}",
             f"closed exits: {len(exits)}  |  win rate: {_fmt_pct(wins, len(exits))} "
             f"({wins}/{len(exits)})",
-            f"realized PnL: {realized:+.2f} {quote} (gross of exit fee)",
+            f"realized PnL: {realized:+.2f} {quote} ({pnl_label})",
             f"fees paid:    {fees:.2f} {quote}",
-            f"net of fees:  {realized - fees:+.2f} {quote}",
+            f"net of fees:  {net_total:+.2f} {quote}",
         ]
 
     # ---- per-coin ----------------------------------------------------------
@@ -76,8 +82,8 @@ def render_db_stats(
                 row["entries"] += 1
             else:
                 row["exits"] += 1
-                row["pnl"] += t.realized_pnl
-                if t.realized_pnl > 0:
+                row["pnl"] += profit(t)
+                if profit(t) > 0:
                     row["wins"] += 1
         lines += ["", "coin       | entries | exits | win% | realized PnL"]
         for sym in sorted(per):

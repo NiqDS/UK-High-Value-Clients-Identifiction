@@ -11,7 +11,7 @@ DAY_MS = 86_400_000
 
 
 def finite(value: float, *, positive: bool = False) -> float:
-    if not math.isfinite(value) or (value <= 0 if positive else value < 0):
+    if isinstance(value,bool) or not isinstance(value,(int,float)) or not math.isfinite(value) or (value <= 0 if positive else value < 0):
         raise ValueError("Invalid account or market number")
     return value
 

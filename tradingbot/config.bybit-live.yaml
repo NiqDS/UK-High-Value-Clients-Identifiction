@@ -116,7 +116,7 @@ app:
   trading_enabled: true
   log_level: INFO
   log_json: false
-  db_url: sqlite:///data/tradingbot_daily_v2_paper.db
+  db_url: sqlite:///data/tradingbot_daily_v3_paper.db
   heartbeat_interval_seconds: 60
   max_api_latency_ms: 3000
   max_consecutive_failures: 3

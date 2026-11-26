@@ -144,17 +144,6 @@ async def test_paper_broker_idempotent_on_client_order_id() -> None:
 
 
 # --- live broker (mocked) --------------------------------------------------
-async def test_live_broker_places_and_fills(fake_client) -> None:
-    broker = LiveBroker(ExchangeAdapter(fake_client))
-    order = Order(
-        client_order_id="cid-9", symbol="BTC/USD", side=Side.BUY, amount=0.4,
-        order_type=OrderType.LIMIT, role=LiquidityRole.MAKER, price=100.0,
-        reference_price=100.0,
-    )
-    res = await broker.place_order(order)
-    assert res.status is ExecStatus.FILLED
-    assert res.exchange_order_id == "EX-1"
-    assert res.fill.price == pytest.approx(100.0)
-    # idempotency guard: a second submit is skipped
-    res2 = await broker.place_order(order)
-    assert res2.status is ExecStatus.SKIPPED
+def test_uncertified_live_broker_cannot_submit(fake_client):
+    with pytest.raises(RuntimeError,match='Live execution blocked'):
+        LiveBroker(ExchangeAdapter(fake_client))

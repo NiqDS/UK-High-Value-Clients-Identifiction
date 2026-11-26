@@ -51,30 +51,33 @@ def parse_kline_csv(text: str) -> list[Candle]:
     open_time, open, high, low, close, volume, ... Timestamps are normalised to
     milliseconds (Binance switched some recent files to microseconds)."""
     candles: list[Candle] = []
-    for line in text.splitlines():
-        parts = line.split(",")
-        if len(parts) < 6:
+    import math
+    for index,line in enumerate(text.splitlines()):
+        if not line.strip():
             continue
-        try:
-            ts = int(float(parts[0]))
-        except ValueError:
-            continue  # header row
-        if ts > 1e14:  # microseconds -> milliseconds
-            ts //= 1000
-        try:
-            candles.append(Candle(
-                timestamp=ts, open=float(parts[1]), high=float(parts[2]),
-                low=float(parts[3]), close=float(parts[4]), volume=float(parts[5]),
-            ))
-        except ValueError:
+        parts=line.split(',')
+        if index==0 and parts[0] in ('open_time','timestamp','Open time'):
             continue
+        if len(parts)<6:
+            raise ValueError('Malformed archive row')
+        ts=int(parts[0])
+        if ts>1e14:
+            ts//=1000
+        values=[float(x) for x in parts[1:6]]
+        if any(not math.isfinite(x) for x in values) or min(values[:4])<=0 or values[4]<0:
+            raise ValueError('Invalid archive values')
+        o,h,l,c,v=values
+        if not l<=min(o,c)<=max(o,c)<=h:
+            raise ValueError('Invalid archive OHLC range')
+        candles.append(Candle(ts,o,h,l,c,v))
     return candles
 
 
-def fetch_klines(symbol: str = "BTCUSDT", interval: str = "1h", months: int = 12) -> list[Candle]:
+def fetch_klines(symbol: str = "BTCUSDT", interval: str = "1h", months: int = 12, *, allowed_missing=frozenset()) -> list[Candle]:
     sym = normalize_symbol(symbol)
     candles: list[Candle] = []
-    for year, month in _completed_months(months):
+    periods = _completed_months(months)
+    for year, month in periods:
         url = f"{_BASE}/{sym}/{interval}/{sym}-{interval}-{year:04d}-{month:02d}.zip"
         try:
             req = urllib.request.Request(url, headers={"User-Agent": "tradingbot"})
@@ -83,7 +86,22 @@ def fetch_klines(symbol: str = "BTCUSDT", interval: str = "1h", months: int = 12
             zf = zipfile.ZipFile(io.BytesIO(raw))
             text = zf.read(zf.namelist()[0]).decode()
             candles += parse_kline_csv(text)
-        except Exception as exc:  # missing month / network — skip, keep going
-            logger.warning("binance-vision: skipped %04d-%02d (%s)", year, month, exc)
-    candles.sort(key=lambda c: c.timestamp)
+        except Exception as exc:
+            raise ValueError(f'Archive unavailable or invalid: {sym} {year:04d}-{month:02d}') from exc
+    from ..app.runner import timeframe_ms
+    step=timeframe_ms(interval)
+    if not periods or not candles:
+        raise ValueError('No requested archive data')
+    first=_dt.datetime(*periods[0],1,tzinfo=_dt.timezone.utc)
+    y,m=periods[-1]
+    last=_dt.datetime(y+1,1,1,tzinfo=_dt.timezone.utc) if m==12 else _dt.datetime(y,m+1,1,tzinfo=_dt.timezone.utc)
+    expected=set(range(int(first.timestamp()*1000),int(last.timestamp()*1000),step))
+    actual=[c.timestamp for c in candles]
+    if actual!=sorted(set(actual)):
+        raise ValueError('Archive timestamps are duplicated or unordered')
+    allowed=set(allowed_missing)
+    if not allowed<=expected or allowed & set(actual):
+        raise ValueError('Invalid declared suspension timestamps')
+    if set(actual)!=expected-allowed:
+        raise ValueError('Archive has missing or unexpected bars; supply verified suspension metadata')
     return candles

@@ -1,4 +1,4 @@
-# Daily algorithm review: v2, stage 1
+# Daily algorithm review: v3 safety build
 
 Date: 26 November 2026.
 
@@ -14,7 +14,7 @@ A signal is a request derived from completed price bars. A fill is a record of a
 
 Notional is units multiplied by the estimated execution price. Equity is cash plus the marked value of holdings.
 
-An entry claim is a saved record that prevents another submission for the same daily signal. It is not a complete order record.
+An entry claim prevents another submission for the same daily signal. A separate order journal stores the order plan and execution state. An acknowledgement does not prove a fill.
 
 The strategy expects a few large gains to pay for failed breakouts. Historical profit does not prove future profit.
 
@@ -53,13 +53,19 @@ The build therefore retains the 50/15 daily signal and the original exit rule. I
 
 ## 3. Active profile and asset universe
 
-The candidate symbols remain:
+The default paper profile is `config.bybiteu-daily-paper.yaml`. It uses `ccxt.bybiteu`, quote cash in USDC, and these symbols:
 
-BTC/USDT, ETH/USDT, BNB/USDT, ADA/USDT, AVAX/USDT, DOGE/USDT, and TRX/USDT.
+BTC/USDC, ETH/USDC, BNB/USDC, ADA/USDC, AVAX/USDC, DOGE/USDC, and TRX/USDC.
 
-This is a research list. Current Bybit EU eligibility is not certified. The exchange client in this paper profile remains the existing `bybit` client.
+The public EU spot instrument endpoint returned 129 instruments on 26 November 2026. All seven USDC pairs had Trading status. None of the seven USDT pairs appeared. The response had no next-page cursor.
 
-Do not treat this client name as confirmation of EU account access. The private EU authentication problem remains unresolved.
+Source: https://api.bybit.eu/v5/market/instruments-info?category=spot
+
+Response SHA-256: `0c2c14b97eb1b9e2185e1f8ef9b581c2deebb5b76f4b126b31955c0b2ca68aa7`.
+
+The USDT configurations remain available for research. They are not the default EU profile. The historical results in this document use USDT prices. They do not prove USDC performance. No account funds were converted.
+
+A public listing does not prove account permission, fee tier, available balance, or native stop support. Private EU authentication remains unresolved.
 
 The historical 15-asset universe tests selection bias. It is not automatically copied into the active profile.
 
@@ -68,18 +74,18 @@ The active profile has these settings:
 - Daily completed bars.
 - Entry channel: 50 bars.
 - Exit channel: 15 bars.
-- Target entry notional: 27 USDT.
+- Target entry notional: 27 quote units.
 - Maximum positions: seven.
-- Absolute entry cap: 30 USDT.
+- Absolute entry cap: 30 quote units.
 - Percentage entry cap: 15% of marked equity.
-- Cash floor: 10 USDT.
-- Additional cash buffer: 5 USDT.
+- Cash floor: 10 quote units.
+- Additional cash buffer: 5 quote units.
 - Poll interval: 60 seconds.
 - No fixed take-profit.
 - No raised channel stop.
 - No trend, funding, MVRV, or regime filter.
 - Event filter disabled. No verified active macro-event calendar is supplied.
-- Learning disabled until net accounting and fill recovery are complete.
+- Learning disabled. Strategy parameters do not change automatically.
 
 The profile is not a constant-percentage portfolio. Entry amounts remain approximately fixed as account value changes.
 
@@ -136,9 +142,9 @@ A failed or uncertain attempt keeps its claim. The current stage does not automa
 
 This prevents same-bar entry attempts after a stop. It can also miss an entry after a temporary execution rejection.
 
-Full order recovery must distinguish a proved rejection from an unknown outcome. That work is pending.
+The order journal distinguishes prepared, unknown, open, partial, filled, canceled, and rejected states. An unknown outcome blocks another submission. Recovery queries the venue interface with the saved identity. It does not repeat an uncertain submission.
 
-The claim store is separate from fill accounting. It does not prove that an order filled, and it does not replace venue reconciliation.
+The claim store remains separate from fill accounting. It prevents another entry for the same signal, including after a terminal rejection. This can miss a valid retry. The journal stores the immutable order plan before submission. The paper venue is implemented. A real EU recovery adapter is not certified.
 
 ## 6. Account value and shared cash
 
@@ -165,9 +171,9 @@ Paper sale cash change = fill proceeds - fee
 Paper equity = remaining cash + marked paper holdings
 ```
 
-Paper cash and positions are saved in the same JSON snapshot. Paper holdings without a verified cash balance require migration.
+SQLite is the authority for daily paper cash and positions. Each fill updates cash, units, cost, stop state, trade history, and daily counters in one transaction. A failure before commit rolls back all updates. JSON is a legacy format. Existing history without a verified journal requires migration.
 
-The two daily configuration filenames refer to the same new paper database. They are alternatives, not two services to run together.
+The EU paper profile uses a new v3 database. The USDT research profiles use a separate v3 database. Profiles that share a database are alternatives. A process lock prevents concurrent persistent runners for the same resolved database path. It does not lock an exchange account across different databases or hosts.
 
 ## 7. Entry size and current-price budget
 
@@ -197,9 +203,9 @@ Example: a 27-USDT budget at an ask of 150 gives 0.18 units. The old quantity of
 
 At a 0.10% fee, the 27-USDT order also requires approximately 0.027 USDT for the fee.
 
-Exchange quantity precision and minimums still require venue checks. Market orders can fill beyond the observed quote.
+The adapter rounds units down with the venue quantity precision. It checks active spot status, quote currency, quantity limits, and minimum cost. These checks require current market metadata. They do not prove private order acceptance. Market orders can fill beyond the observed quote.
 
-The current price checks are not a venue-enforced maximum fill price. A fresh check after delayed approval remains pending.
+After approval, the pipeline fetches a fresh quote and account snapshot. It repeats risk checks and verifies the daily signal timestamp. It rejects an expired signal or an excessive order. It does not silently increase quantity. The price check is not a venue-enforced maximum fill price.
 
 ## 8. Exit and protection rules
 
@@ -219,66 +225,95 @@ The stop is fixed at entry. The normal 15-bar channel exit is recalculated from 
 
 No fixed profit target is used. No new raised channel stop was adopted.
 
-The poll interval is now one minute. This improves observation frequency, but it does not provide independent protection.
+The main signal poll interval is one minute. A separate local protection task checks saved holdings every five seconds. A known stop can execute before candle retrieval. A candle outage therefore does not itself suppress this check.
 
-The current stop path still depends on earlier candle and order-state calls. A failed call can prevent the stop check.
+The local task still needs the process, server, ticker feed, and execution path. An unresolved order for the same symbol can block an exit. This task is not protection during server failure.
 
-An unknown order query deliberately blocks new submissions. That conservative policy can also block a local exit.
+A separate protection interface checks a stable protective identity, acknowledged quantity, saved stop, and current position state. Its fake-venue tests pass. No live EU adapter is connected to that interface.
 
-A health suspension itself permits a known risk-reducing exit. This positive control passed the fault test.
+Generic V5 documentation describes spot conditional orders. It does not certify EU account support or cancellation behavior:
 
-Independent protection remains pending. Actual Bybit EU spot conditional-order support and recovery must be verified before any live release.
+https://bybit-exchange.github.io/docs/v5/order/create-order
+
+A live release needs a venue-held stop, recovery from history and executions, and tested stop-versus-sale cancellation races. Live startup remains blocked.
 
 ## 9. Risk limits and their meaning
 
-The configured limits include seven positions, eight open orders, fourteen daily trades, and 206 USDT of daily traded notional.
+The configured limits include seven positions, eight open orders, fourteen daily trades, and 206 quote units of daily traded notional.
 
-The daily loss setting is 28 USDT. The cash floor is 10 USDT, with a 5-USDT sizing buffer.
+The daily loss setting is 28 quote units. The cash floor is 10 quote units, with a 5-unit sizing buffer.
 
 These settings limit entry authorization. They do not guarantee a maximum realized loss or maximum portfolio drawdown.
 
 The 15% per-trade risk ceiling remains deliberately wide. It is not a recommendation to lose 15% on each trade.
 
-The current daily-profit calculation is not a complete start-of-day marked-equity calculation. It needs the remaining accounting work.
+The journal saves the first valid marked equity for each trading day. The loss check uses the change from that baseline, including unrealized value. A restart preserves the baseline. The first mark can occur after midnight. A gap before that first mark is not included. This is not a continuous midnight valuation service.
 
-## 10. What is implemented now
+## 10. Order recovery and net accounting
+
+The journal saves the order plan before submission. A stable client identity joins the plan, venue query, and executions. Every execution needs an immutable fill identity, quantity, price, fee, fee currency, and timezone-aware timestamp.
+
+An open or closed acknowledgement alone does not create a fill. A closed acknowledgement with zero executions fails. A partial execution records only its actual quantity. An incomplete closed response remains partial until recovery supplies the missing records.
+
+Duplicate delivery has no second economic effect. A duplicate identity with different content fails. Decimal values are normalized before comparison. Non-finite, negative, or boolean monetary values fail validation.
+
+A cancellation response remains uncertain until the venue interface proves finality. Known late executions still apply. A proved terminal state cannot move backwards. The real adapter must query execution history as well as open orders. A missing open-order record does not prove no fill.
+
+The fee rules are:
+
+```text
+Buy with quote fee:
+    received units = gross fill units
+    cost basis = gross units * price + quote fee
+Buy with base fee:
+    received units = gross fill units - base fee
+    cost basis = gross units * price
+Sell with quote fee:
+    removed units = gross fill units
+    net proceeds = gross units * price - quote fee
+Sell with base fee:
+    removed units = gross fill units + base fee
+    net proceeds = gross units * price
+Released cost = prior cost basis * removed units / prior units
+Realized net = net proceeds - released cost
+```
+
+A partial sale retains the remaining cost in proportion to remaining units. A full sale releases all remaining cost. A fee in a third asset fails closed. No conversion rate is invented.
+
+Net trade records drive the weekly report and database statistics. They do not subtract recorded fees twice. Entry records have zero realized net. Legacy rows retain their old reporting interpretation; they are not certified journal accounts.
+
+A paper execution is deterministic from the saved order plan. This permits restart recovery after a commit failure. It does not model exchange queue priority, missing liquidity, or a fill during an outage.
+
+## 11. Controls and remaining release gates
 
 | Control | State |
 |---|---|
-| Daily completed-bar 50/15 signal | Retained |
-| Shared marked equity | Implemented |
-| Current-price entry sizing | Implemented |
-| Market-price notional checks | Implemented |
-| Finite account, mark, quantity, and stop checks on edited paths | Implemented |
-| Strict required daily window | Implemented |
-| Stable entry identity and persistent accepted-entry claim | Implemented |
-| Evolving paper cash, saved with positions | Implemented |
-| New paper database namespace | Implemented |
-| Four-hour active config | Disabled; installer rejects its named service |
-| Daily service default | Daily paper configuration |
-| Live CLI startup | Blocked before broker construction, including saved-override attempts |
-| Single-pass daily paper demo | Blocked; use the persistent runner |
+| Daily 50/15 signal and original initial stop | Retained |
+| Shared marked equity and current-ask sizing | Implemented |
+| Required daily grid and archive completeness | Implemented |
+| Decimal journal, fee-inclusive cost, net reports | Implemented and tested offline |
+| Atomic fill application and duplicate protection | Implemented and tested offline |
+| Unknown outcomes, partial fills, and restart recovery | Implemented with paper and test venue interfaces |
+| Fresh risk check after approval | Implemented |
+| Single process per database | Implemented |
+| Local stop task independent of candle retrieval | Implemented; requires running server |
+| Venue-held stop acknowledgement interface | Tested with a fake venue only |
+| EU USDC public market eligibility | Verified on the stated date |
+| Four-hour service | Disabled by operator; installer rejects its named service |
+| Live CLI and legacy live broker | Blocked |
 
-The installer guard is not a general service inventory. The operator has already disabled the actual four-hour AWS service.
+These release gates remain:
 
-## 11. Work reserved for 04:00
+1. Resolve private EU authentication and account permissions.
+2. Test the USDC profile with suitable USDC data, actual fees, spread, and lot sizes.
+3. Implement and certify the real durable execution adapter. Query order history and executions across restarts.
+4. Certify native stop creation, quantity updates, gap behavior, and cancellation races on EU spot.
+5. Define third-asset fee conversion and verified legacy account migration.
+6. Test server disk failure, backup recovery, monitoring, and clock behavior on AWS.
+7. Test out-of-band fills, deposits, withdrawals, and manual holdings without invented cost history.
+8. Collect a new forward paper period. Compare simple exposure rules at comparable risk.
 
-The following faults remain release blockers:
-
-1. Durable order and fill recovery is incomplete. Open acknowledgements, partial fills, late fills, and uncertain submissions need explicit states.
-2. A closed response with zero filled units must not become a full fill.
-3. Purchase fees are still missing from reported realized net profit. Paper cash includes the fee, but the report does not include full cost basis.
-4. Base-asset and third-asset fees need one consistent accounting policy.
-5. Order, fill, cash, position, cost, and protection records need atomic transactions and fill-message deduplication.
-6. Position-file save errors can still be logged without stopping the loop. Database errors can interrupt snapshot updates.
-7. Saved position validation remains incomplete for all numeric fields. Strict JSON parsing alone is insufficient.
-8. Startup recovery can adopt holdings without their original cost and stop. It can also discard small genuine holdings.
-9. Independent protection and its venue behavior remain unverified.
-10. A process lock must prevent two daily instances from sharing the same state concurrently.
-11. Historical archive downloads outside the daily runner can still skip missing files. Their validation must be integrated.
-12. Exchange eligibility, fee tiers, quantity precision, and private authentication remain unresolved.
-
-Do not remove the live startup block merely because paper tests pass.
+Do not remove the live block because offline tests pass. The installer guard is not a complete inventory of services.
 
 ## 12. Calculation evidence
 
@@ -298,7 +333,7 @@ This confirms the research arithmetic. It does not establish actual executable f
 
 The separate reference ledger passed 450 unique fills, 316 injected failures, 450 restarts, and 450 duplicate-message checks.
 
-That ledger is not yet integrated into this runner.
+The production journal now also replays the eight base research cases. It reproduces all 635 closed trades and 1,270 executions. Each execution is delivered twice. Final cash and net reports match the reference within 0.00000001 quote units. This checks accounting, not signal execution.
 
 ## 13. Software test evidence
 
@@ -310,7 +345,11 @@ New cases check marked equity, invalid marks, current-price caps, paper cash rec
 
 They also check the daily runner wiring, the retired four-hour configuration, and the live startup block.
 
-The final exact count and source changes are recorded with the build artifacts. This stage has no new AWS test result.
+The final suite passed 446 tests with Python networking and .env access blocked. It includes a child-process death before commit, restart recovery, late partial fills, base fees, malformed balances, exact protection coverage, and process locking. New module lint passed. This stage has no new AWS test result.
+
+The actual daily runner also replayed stored prices from 1 June through 24 November 2026. It completed 29,736 symbol passes and nine closed trades. Starting cash was 206 USDT. Final cash was 223.20657846 USDT: +8.352708%. Maximum drawdown at hourly closing marks was 10.501467%. Fees were 0.50371029 USDT.
+
+The replay uses hourly opening prices with 0.05% adverse price cost per side and 0.10% fees per side. It assumes healthy infrastructure. It does not apply actual lot sizes, an order book, Telegram approval delay, or native stops. It uses USDT research data. Its result is not a USDC or live-performance forecast.
 
 ## 14. Review questions for another model
 
@@ -335,9 +374,16 @@ The final exact count and source changes are recorded with the build artifacts. 
 - `src/tradingbot/app/runner.py`: account value, current-price sizing, paper cash, and local exits.
 - `src/tradingbot/risk/engine.py`: numerical account checks and market-price budgets.
 - `src/tradingbot/execution/pipeline.py`: claim before submission.
-- `src/tradingbot/app/portfolio.py`: paper cash and position snapshot.
+- `src/tradingbot/store/journal.py`: canonical cash, cost, fills, positions, and daily equity.
+- `src/tradingbot/execution/journal_broker.py`: durable submission and recovery.
+- `src/tradingbot/app/protection.py`: protection acknowledgement interface.
+- `src/tradingbot/app/instance_lock.py`: single-runner lock.
+- `src/tradingbot/app/portfolio.py`: position view and strict legacy snapshot parsing.
 - `src/tradingbot/__main__.py`: build wiring and live startup block.
-- `tests/test_daily_policy.py`: new expected-safe regression cases.
+- `tests/test_daily_policy.py`: daily policy regression cases.
+- `tests/test_journal_safety.py`: journal, crash, fee, recovery, and protection cases.
+- `scripts/replay_accounting.py`: production journal research parity.
+- `scripts/replay_daily_runner.py`: historical runner replay.
 
 The full research records are in the audit workspace under `outputs/strategy-validation-phase2-20261125`.
 

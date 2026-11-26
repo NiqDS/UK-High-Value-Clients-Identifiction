@@ -136,6 +136,10 @@ class RiskEngine:
                 or min(snapshot.equity_quote, snapshot.free_quote, snapshot.used_quote) < 0):
             return RiskDecision.reject(RiskGate.INVALID_INTENT, 'Invalid numeric account state')
 
+        if snapshot.ticker is not None:
+            quote_values=[snapshot.ticker.bid,snapshot.ticker.ask,snapshot.ticker.last]
+            if any(v is not None and (not math.isfinite(v) or v<=0) for v in quote_values):
+                return RiskDecision.reject(RiskGate.INVALID_INTENT, 'Invalid market quote')
         # 2. symbol allowlist (universal — applies to entries AND exits)
         if intent.symbol not in cfg.exchange.symbols_allowlist:
             return RiskDecision.reject(
@@ -151,6 +155,8 @@ class RiskEngine:
             return RiskDecision.reject(
                 RiskGate.INVALID_INTENT, "no usable price (no limit price and no ticker)"
             )
+        if intent.is_entry and intent.stop_price is not None and intent.stop_price>=est_price:
+            return RiskDecision.reject(RiskGate.INVALID_INTENT, 'Entry is at or below its stop')
         notional = intent.notional(est_price)
         fee_pct = self._effective_fee_pct(snapshot)
         rt_fee_quote = self._round_trip_fee_quote(intent, est_price, fee_pct)

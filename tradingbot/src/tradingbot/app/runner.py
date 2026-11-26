@@ -116,6 +116,9 @@ class TradingRunner:
         self.email_sender = email_sender
         self.regime_overlay = regime_overlay
         self.position_store = position_store
+        self.clock = lambda: datetime.now(timezone.utc)
+        self.journal = None
+        self.instance_lock = None
         self.decision_log = decision_log
         self._stop = asyncio.Event()
         self._week_first_price: dict[str, float] = {}
@@ -212,7 +215,7 @@ class TradingRunner:
             return
         if not self.settings.secrets.has_exchange_credentials:
             raise AccountStateUnavailable('Cannot reconcile live positions without credentials')
-        now = now or datetime.now(timezone.utc)
+        now = now or self.clock()
         try:
             bal = await self.adapter.fetch_balance()
         except Exception as exc:
@@ -234,56 +237,32 @@ class TradingRunner:
                 raise AccountStateUnavailable(f'Invalid startup market/account data for {symbol}')
             observed.append((symbol, units, price))
 
-        min_notional = self.cfg.risk.min_notional_per_trade_quote
-        changed = False
-        for symbol, ex_units, price in observed:
-            base = symbol.split("/")[0]
-            ex_value = ex_units * price
+        # A balance is not execution history. Do not invent cost, stops or units.
+        for symbol, units, price in observed:
             pos = self.portfolio.get(symbol)
-
-            if pos is None and ex_value >= min_notional:
-                # untracked holding on the venue -> adopt so the exit logic manages
-                # it (entry=current price; the channel exit still governs downside)
-                logger.critical(
-                    "RECONCILE: untracked %s holding on the exchange (%.8f = %.2f %s) — "
-                    "adopting as a managed position at the current price. Likely a fill "
-                    "the bot placed but crashed before recording.",
-                    base, ex_units, ex_value, self.cfg.exchange.quote_currency)
-                self.portfolio.positions[symbol] = Position(
-                    symbol=symbol, units=ex_units, entry_price=price, entry_ts=now)
-                changed = True
-            elif pos is not None and ex_value < min_notional:
-                # the tracked position is gone on the venue (manual sell / liquidation)
-                logger.warning(
-                    "RECONCILE: tracked %s position not present on the exchange "
-                    "(%.2f %s < min) — dropping the phantom so no exits are emitted for it.",
-                    symbol, ex_value, self.cfg.exchange.quote_currency)
-                del self.portfolio.positions[symbol]
-                changed = True
-            elif pos is not None and ex_units > 0 and abs(pos.units - ex_units) > ex_units * 0.01:
-                # material unit drift (partial external fill) -> trust the exchange
-                logger.warning("RECONCILE: %s units %.8f (tracker) != %.8f (exchange) — "
-                               "adopting the exchange amount.", symbol, pos.units, ex_units)
-                pos.units = ex_units
-                changed = True
-
-        if changed and self.position_store is not None:
-            self.position_store.save(self.portfolio)
-        else:
-            logger.info("reconcile: tracker matches the exchange (%d position(s)).",
-                        len(self.portfolio.positions))
+            tracked = pos.units if pos else 0.0
+            if abs(units-tracked) > max(1e-12, abs(units)*1e-8):
+                raise AccountStateUnavailable(f'Inventory mismatch for {symbol}; verified fill recovery required')
+            if pos is not None and (pos.stop is None or pos.cost_basis is None):
+                raise AccountStateUnavailable(f'Position cost or protection missing for {symbol}')
 
     # -- one pass for one symbol -------------------------------------------
     async def run_once(self, symbol: str, now: datetime | None = None) -> list[PipelineResult]:
-        now = now or datetime.now(timezone.utc)
+        now = now or self.clock()
+        if self.journal is not None:
+            await self.pipeline.executor.broker.recover_all()
+            self.portfolio = self.journal.snapshot()
+            self._equity_cache = None
+        ticker = await self.adapter.fetch_ticker(symbol)
+        # A known local stop must not wait for candle downloads or reporting.
+        protective = self._tp_stop_exits(symbol, ticker.last)
+        if protective and (self.cfg.app.dry_run or self.journal is not None):
+            return await self._execute_protection(symbol,ticker,protective,now)
         await self.refresh_regime(now, symbol)
-        # cancel resting bot orders left by prior passes/crashes BEFORE evaluating,
-        # so they can never fill later untracked; the count feeds MAX_OPEN_ORDERS
         open_orders = await self._cancel_stale_orders(symbol)
         candles = await self.adapter.fetch_ohlcv(
             symbol, self.cfg.strategy.timeframe, self.cfg.strategy.ohlcv_limit
         )
-        ticker = await self.adapter.fetch_ticker(symbol)
         if self.cfg.strategy.signal_on_closed_bar:
             candles = drop_forming_candle(candles, self.cfg.strategy.timeframe, now)
 
@@ -324,7 +303,13 @@ class TradingRunner:
             equity_quote=equity, free_quote=free, open_positions=len(self.portfolio.positions),
             open_orders=open_orders, unrealized_pnl_quote=self._unrealized_pnl(),
             ticker=ticker, now=now,
+            market_min_notional_quote=self.adapter.market_min_cost(symbol) if self.cfg.strategy.daily_policy_enabled else None,
         )
+        if self.journal is not None and equity > 0:
+            change = self.journal.day_change(now,equity)
+            # RiskEngine adds realized counters. Supply the remaining marked change.
+            realized = self.store.get_daily_counters(now).realized_pnl
+            snapshot.unrealized_pnl_quote = change-realized
         if self.cfg.strategy.daily_policy_enabled:
             intents = self._size_daily_entries(intents, snapshot)
         results = await self.pipeline.process_signals(intents, snapshot)
@@ -332,6 +317,35 @@ class TradingRunner:
         for a in alerts:
             await self._deliver_trade_alert(a)
         return results
+
+    async def _execute_protection(self,symbol,ticker,intents,now):
+        snapshot=AccountSnapshot(equity_quote=0,free_quote=0,
+                                 open_positions=len(self.portfolio.positions),ticker=ticker,now=now)
+        results=await self.pipeline.process_signals(self._normalize_exits(symbol,intents),snapshot)
+        for alert in self._apply_fills(results,now):
+            await self._deliver_trade_alert(alert)
+        return results
+
+    async def protection_once(self):
+        if self.journal is not None:
+            self.portfolio=self.journal.snapshot()
+        for symbol in list(self.portfolio.positions):
+            ticker=await self.adapter.fetch_ticker(symbol)
+            intents=self._tp_stop_exits(symbol,ticker.last)
+            if intents:
+                await self._execute_protection(symbol,ticker,intents,self.clock())
+
+    async def _protection_loop(self):
+        while not self._stop.is_set():
+            try:
+                await self.protection_once()
+            except Exception:
+                # Keep observing; an unrelated candle/report failure cannot stop this loop.
+                logger.exception('Local protection failed; live mode remains blocked')
+            try:
+                await asyncio.wait_for(self._stop.wait(),timeout=5)
+            except asyncio.TimeoutError:
+                pass
 
     def _size_daily_entries(self, intents, snapshot):
         from dataclasses import replace
@@ -357,6 +371,7 @@ class TradingRunner:
                 units = min(budget / ask, equity * risk.per_trade_risk_pct / 100 / (ask - stop))
                 if units <= 0:
                     continue
+                units=self.adapter.round_amount(intent.symbol,units)
                 result.append(replace(intent, amount=units, price=ask))
             except (ValueError, TypeError, AttributeError):
                 logger.error('Daily entry blocked: invalid sizing state')
@@ -398,6 +413,8 @@ class TradingRunner:
         """Live only: cancel any resting bot-owned orders (client id 'tb-*') so a
         stale bid can never fill untracked later. Returns the number of open
         orders remaining on the venue for this symbol."""
+        if self.journal is not None:
+            return len(self.journal.pending())
         if self.cfg.app.dry_run:
             return 0
         try:
@@ -428,8 +445,10 @@ class TradingRunner:
         A stop is an emergency (crosses the spread, bypasses approval); a
         take-profit rests as a normal limit exit."""
         pos = self.portfolio.get(symbol)
-        if pos is None or not last:
+        if pos is None:
             return []
+        from ..strategy.daily_policy import finite
+        finite(last,positive=True)
         # ratchet a trailing stop up behind the latest price
         if pos.trail_distance is not None:
             trailed = last - pos.trail_distance
@@ -482,7 +501,7 @@ class TradingRunner:
                 notional=(d.notional if d else None), est_price=(d.est_price if d else None),
                 risk_pct=(d.risk_pct_equity if d else None),
                 stop_distance_pct=(d.stop_distance_pct if d else None),
-                reason=r.intent.reason,
+                reason=r.intent.reason, source="paper" if self.cfg.app.dry_run else "live",
             )
         except Exception:
             logger.exception("decision-log write failed (continuing)")
@@ -504,6 +523,15 @@ class TradingRunner:
     def _apply_fills(self, results: list[PipelineResult], now: datetime) -> list[dict]:
         """Record every fill; return a per-fill alert payload (incl. the DB entry
         id) so the caller can push a Telegram alert. Kept sync + testable."""
+        if self.journal is not None:
+            alerts=[]
+            for result in results:
+                self._log_decision(result,now)
+                if result.execution is not None:
+                    alerts.extend(result.execution.receipts)
+            self.portfolio=self.journal.snapshot()
+            self._equity_cache=None
+            return alerts
         filled_any = False
         alerts: list[dict] = []
         for r in results:
@@ -668,7 +696,7 @@ class TradingRunner:
     async def emit_monthly_review(self, now: datetime | None = None) -> str | None:
         """Monthly deep review: 30-day performance + bad-trade learning assessment
         + missed-opportunity summary. Delivered to Telegram, written to reports/."""
-        now = now or datetime.now(timezone.utc)
+        now = now or self.clock()
         parts: list[str] = ["📅 *Monthly review* — performance, bad trades & missed opportunities"]
         if self.reporter is not None:
             try:
@@ -717,14 +745,22 @@ class TradingRunner:
 
         tasks: list[asyncio.Task] = []
         try:
+            if self.instance_lock is not None:
+                self.instance_lock.acquire()
             safe = True if self.cfg.app.dry_run else await trade_only_key_self_check(self.adapter)
             if not safe and not self.cfg.app.dry_run:
                 logger.error("Refusing to start LIVE with a withdrawal-capable key.")
                 return
             await self.adapter.load_markets()
+            if self.cfg.strategy.daily_policy_enabled:
+                self.adapter.validate_universe(self.cfg.exchange.symbols_allowlist,self.cfg.exchange.quote_currency)
             # verify the persisted tracker against reality BEFORE trading (double-buy /
             # phantom-exit protection after a crash or an out-of-band fill)
             await self.reconcile_positions()
+            if self.journal is not None:
+                await self.pipeline.executor.broker.recover_all()
+                self.portfolio=self.journal.snapshot()
+                tasks.append(asyncio.create_task(self._protection_loop()))
 
             if self.health is not None:
                 async def ping() -> None:
@@ -768,5 +804,9 @@ class TradingRunner:
                 t.cancel()
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
-            await self.adapter.close()
+            try:
+                await self.adapter.close()
+            finally:
+                if self.instance_lock is not None:
+                    self.instance_lock.release()
             logger.info("Runner stopped.")

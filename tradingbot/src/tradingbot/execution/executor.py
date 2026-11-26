@@ -50,7 +50,9 @@ class Executor:
         if not best_bid or not best_ask:
             return ExecutionResult(ExecStatus.REJECTED, None, reason="no bid/ask for execution")
 
-        client_order_id = intent.client_order_id or f"tb-{uuid.uuid4().hex[:16]}"
+        client_order_id = intent.client_order_id or (
+            self.broker.exit_identity(intent.symbol) if not intent.is_entry and hasattr(self.broker,'exit_identity')
+            else f"tb-{uuid.uuid4().hex[:16]}")
         reference = decision.est_price or (best_ask if intent.side == Side.BUY else best_bid)
 
         is_market = intent.order_type is OrderType.MARKET
@@ -91,6 +93,7 @@ class Executor:
             role=role,
             price=price,
             reference_price=reference,
+            stop_price=intent.stop_price, take_profit_price=intent.take_profit_price, reason=intent.reason,
         )
 
     def _slippage_ok(self, order: Order) -> bool:

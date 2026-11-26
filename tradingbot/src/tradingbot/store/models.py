@@ -31,6 +31,7 @@ class TradeRecord(Base):
     reason: Mapped[str] = mapped_column(String(120), default="")
     valuation_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
     client_order_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    net_pnl: Mapped[float | None] = mapped_column(Float, nullable=True)
     # % of equity risked to the stop at entry (nullable; exits/no-stop have none)
     risk_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
 

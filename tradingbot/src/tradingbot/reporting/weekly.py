@@ -30,23 +30,30 @@ class WeeklyStats:
 
 
 class WeeklyReporter:
-    def __init__(self, trade_log: TradeLog) -> None:
+    def __init__(self, trade_log: TradeLog, net_accounting=False) -> None:
         self.trade_log = trade_log
+        self.net_accounting = net_accounting
 
     def compute(
         self, start: datetime, end: datetime, market_returns_pct: dict[str, float] | None = None
     ) -> WeeklyStats:
         trades = self.trade_log.between(start, end)
+        def net(t):
+            value=getattr(t,'net_pnl',None)
+            if value is not None:
+                return value
+            return t.realized_pnl-t.fee_quote
+        journal_mode = self.net_accounting or any(getattr(t,'net_pnl',None) is not None for t in trades)
         realized = sum(t.realized_pnl for t in trades)
         fees = sum(t.fee_quote for t in trades)
         exits = [t for t in trades if not t.is_entry]
-        wins = sum(1 for t in exits if (t.realized_pnl - t.fee_quote) > 0)
+        wins = sum(1 for t in exits if net(t) > 0)
         per_symbol: dict[str, float] = {}
         for t in trades:
-            per_symbol[t.symbol] = per_symbol.get(t.symbol, 0.0) + t.realized_pnl - t.fee_quote
+            per_symbol[t.symbol] = per_symbol.get(t.symbol, 0.0) + (net(t) if not t.is_entry or not journal_mode else 0)
         return WeeklyStats(
             start=start, end=end, num_fills=len(trades), num_exits=len(exits),
-            realized_pnl=realized, fees_paid=fees, net_pnl=realized - fees,
+            realized_pnl=realized, fees_paid=fees, net_pnl=sum(net(t) for t in exits) if journal_mode else realized-fees,
             win_rate_pct=(wins / len(exits) * 100.0) if exits else 0.0,
             per_symbol_net=per_symbol,
             market_returns_pct=market_returns_pct or {},

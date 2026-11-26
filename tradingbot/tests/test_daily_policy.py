@@ -102,6 +102,7 @@ def test_market_budget_uses_current_ask():
 def test_daily_size_uses_cash_and_current_price(tmp_path):
     runner, _, _ = build(tmp_path, BuyOnceStrategy())
     runner.cfg = daily_config()
+    runner.adapter.round_amount=lambda symbol,units:units
     snap = AccountSnapshot(
         equity_quote=206, free_quote=179, ticker=Ticker("BTC/USD", 149.9, 150, 150, 1, 1, 0)
     )
@@ -202,7 +203,8 @@ async def test_daily_builder_wires_persistent_claims(tmp_path, monkeypatch):
     cfg.exchange.name = "bybit"
     cfg.app.db_url = f"sqlite:///{tmp_path / 'test.db'}"
     runner, bot, signal = _build_runner(Settings(config=cfg, secrets=Secrets(_env_file=None)))
-    assert runner.pipeline.entry_claim is not None
+    assert runner.journal is not None
+    assert runner.pipeline.executor.broker.journal is runner.journal
     await runner.adapter.close()
 
 
